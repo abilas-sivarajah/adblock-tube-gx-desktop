@@ -1,0 +1,118 @@
+name: Desktop-App bauen
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GXTUBE_VERSION: 0.1.${{ github.run_number }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Unit-Tests
+        run: npm test
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb > /dev/null
+      - name: App starten und wie das Handy fernsteuern (ohne YouTube)
+        env:
+          SMOKE_OFFLINE: '1'
+        run: xvfb-run -a -s "-screen 0 1280x800x24" npm run smoke
+      # Von GitHub-Servern sperrt YouTube oft ("kein Bot"-Abfrage) – deshalb nur zur Info
+      - name: Mit echtem YouTube-Video (nur Info)
+        continue-on-error: true
+        run: xvfb-run -a -s "-screen 0 1280x800x24" npm run smoke
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots-${{ github.run_number }}
+          path: test-e2e/out
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: --win
+          - os: ubuntu-latest
+            target: --linux
+          - os: macos-latest
+            target: --mac
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Version setzen
+        shell: bash
+        run: npm version "$GXTUBE_VERSION" --no-git-tag-version --allow-same-version
+      - name: Bauen
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx electron-builder ${{ matrix.target }} --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GXTube-${{ env.GXTUBE_VERSION }}-${{ runner.os }}
+          path: |
+            dist/*.exe
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.dmg
+            dist/*.yml
+            dist/*.blockmap
+          if-no-files-found: ignore
+
+  release:
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: GXTube-*
+          merge-multiple: true
+      - name: Änderung für die Release-Notiz
+        run: echo "CHANGES=$(git log -1 --format=%s | tr -d '\r')" >> "$GITHUB_ENV"
+      - name: Release veröffentlichen
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.GXTUBE_VERSION }}
+          name: GX Tube Desktop ${{ env.GXTUBE_VERSION }}
+          make_latest: true
+          files: artifacts/*
+          body: |
+            Neu: ${{ env.CHANGES }}
+
+            **Windows:** `GXTube-Setup-${{ env.GXTUBE_VERSION }}.exe` herunterladen und starten (oder die `portable`-Version ohne Installation).
+            Windows SmartScreen meldet „Unbekannter Herausgeber“ → *Weitere Informationen* → *Trotzdem ausführen*.
+            **Linux:** `GXTube-${{ env.GXTUBE_VERSION }}-x86_64.AppImage` (ausführbar machen) oder `.deb`.
+            **macOS:** `GXTube-${{ env.GXTUBE_VERSION }}-mac.dmg` (nicht signiert: Rechtsklick → Öffnen).
+
+            Installierte Windows- und AppImage-Versionen aktualisieren sich selbst.
+
+            Stand: ${{ github.sha }}

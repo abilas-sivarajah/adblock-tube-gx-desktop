@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data: blob:; media-src 'self' blob: data: https:; connect-src 'self' https: blob: data:; font-src 'self' data:; object-src 'none'; base-uri 'none'">
+  <title>GX Tube</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header id="topbar">
+    <button id="btnHome" class="logo" title="Startseite">
+      <svg viewBox="0 0 50 58" aria-hidden="true">
+        <path d="M25,2 L3,9 L3,28 C3,42 13,51 25,56" fill="none" stroke="#FF3355" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M25,2 L47,9 L47,28 C47,42 37,51 25,56" fill="none" stroke="#00C8E0" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M18.5,17 L18.5,39 C18.5,40.5 20,41.3 21.3,40.6 L36,29.6 C37.2,28.8 37.2,27.2 36,26.4 L21.3,15.4 C20,14.7 18.5,15.5 18.5,17 Z" fill="#FF0033"/>
+      </svg>
+      <span>GX Tube</span>
+    </button>
+    <form id="searchForm" autocomplete="off">
+      <div class="search-box">
+        <input id="searchInput" type="search" placeholder="Suchen" spellcheck="false" maxlength="200">
+        <ul id="suggestions" hidden></ul>
+      </div>
+      <button type="submit" class="search-btn" title="Suchen" data-icon="search"></button>
+    </form>
+    <div class="top-actions">
+      <button id="btnCast" class="icon-btn" title="Mit dem Handy verbinden" data-icon="cast"><span id="castBadge" class="badge" hidden></span></button>
+      <button id="btnSettings" class="icon-btn" title="Einstellungen" data-icon="settings"></button>
+    </div>
+    <div id="castPopover" class="popover" hidden></div>
+  </header>
+
+  <main id="views">
+    <section id="view-home" class="view active">
+      <div id="castHero" class="hero"></div>
+      <div id="shelfContinue" class="shelf" hidden>
+        <div class="shelf-head"><h2>Weiter ansehen</h2></div>
+        <div class="row-scroll" id="continueRow"></div>
+      </div>
+      <div id="shelfReco" class="shelf" hidden>
+        <div class="shelf-head"><h2>Empfohlen</h2><span class="hint">Ähnlich zu dem, was du geschaut hast</span></div>
+        <div class="grid" id="recoGrid"></div>
+      </div>
+    </section>
+
+    <section id="view-search" class="view">
+      <div class="grid" id="searchGrid"></div>
+      <div id="searchStatus" class="status"></div>
+    </section>
+
+    <section id="view-settings" class="view">
+      <div class="settings" id="settingsForm"></div>
+    </section>
+  </main>
+
+  <div id="watch" class="watch hidden" tabindex="-1">
+    <div class="stage">
+      <video id="video" playsinline></video>
+      <div id="cover" class="cover"><img id="coverImg" alt=""><div class="spinner"></div></div>
+      <div id="idle" class="idle" hidden></div>
+      <div id="errorBox" class="error-box" hidden><p id="errorText"></p><button id="btnRetry" class="pill">Erneut versuchen</button></div>
+      <div id="centerFlash" class="center-flash"></div>
+      <div id="controls" class="controls">
+        <div class="ctl-top">
+          <button id="btnBack" class="icon-btn" title="Zurück zur Übersicht (Esc)" data-icon="back"></button>
+          <div class="ctl-title">
+            <h1 id="vTitle"></h1>
+            <p id="vChannel"></p>
+          </div>
+          <div id="castChip" class="cast-chip" hidden></div>
+        </div>
+        <div class="ctl-bottom">
+          <div id="seek" class="seek">
+            <div class="seek-track">
+              <div id="seekBuffered" class="seek-buffered"></div>
+              <div id="seekSegments" class="seek-segments"></div>
+              <div id="seekPlayed" class="seek-played"></div>
+            </div>
+            <div id="seekThumb" class="seek-thumb"></div>
+            <div id="seekTooltip" class="seek-tooltip" hidden></div>
+          </div>
+          <div class="ctl-bar">
+            <button id="btnPrev" class="icon-btn" title="Zurück (Shift+P)" data-icon="prev"></button>
+            <button id="btnPlay" class="icon-btn big" title="Abspielen (k)" data-icon="play"></button>
+            <button id="btnNext" class="icon-btn" title="Weiter (Shift+N)" data-icon="next"></button>
+            <div class="volume">
+              <button id="btnMute" class="icon-btn" title="Stumm (m)" data-icon="volume"></button>
+              <input id="volumeSlider" type="range" min="0" max="100" step="1" value="100" aria-label="Lautstärke">
+            </div>
+            <div id="timeLabel" class="time"></div>
+            <div class="spacer"></div>
+            <label class="autoplay-switch" title="Autoplay: nach dem Video ein ähnliches abspielen">
+              <input id="autoplayToggle" type="checkbox"><span class="track"><span class="knob"></span></span>
+            </label>
+            <button id="btnSpeed" class="icon-btn text" title="Geschwindigkeit">1×</button>
+            <button id="btnQuality" class="icon-btn text" title="Qualität">HD</button>
+            <button id="btnQueue" class="icon-btn" title="Warteschlange (q)" data-icon="queue"></button>
+            <button id="btnFull" class="icon-btn" title="Vollbild (f)" data-icon="fullscreen"></button>
+          </div>
+        </div>
+      </div>
+      <div id="miniControls" class="mini-controls">
+        <button id="miniExpand" class="icon-btn" title="Vergrößern" data-icon="expand"></button>
+        <button id="miniClose" class="icon-btn" title="Schließen" data-icon="close"></button>
+        <div class="mini-center">
+          <button id="miniPrev" class="icon-btn" data-icon="prev" title="Zurück"></button>
+          <button id="miniPlay" class="icon-btn big" data-icon="play" title="Abspielen/Pause"></button>
+          <button id="miniNext" class="icon-btn" data-icon="next" title="Weiter"></button>
+        </div>
+        <div class="mini-progress"><div id="miniProgress"></div></div>
+      </div>
+      <div id="menu" class="menu" hidden></div>
+    </div>
+    <aside id="queuePanel" class="queue-panel" hidden>
+      <div class="queue-head">
+        <div>
+          <h2>Warteschlange</h2>
+          <p id="queueSub"></p>
+        </div>
+        <button id="btnQueueClear" class="pill small" title="Alles nach dem aktuellen Video entfernen">Leeren</button>
+        <button id="btnQueueClose" class="icon-btn" data-icon="close" title="Schließen"></button>
+      </div>
+      <ol id="queueList"></ol>
+      <div id="relatedBox" class="related" hidden>
+        <h3>Ähnliche Videos</h3>
+        <div id="relatedList"></div>
+      </div>
+    </aside>
+  </div>
+
+  <div id="toasts"></div>
+
+  <script src="vendor/shaka-player.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

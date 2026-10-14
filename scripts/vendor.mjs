@@ -1,0 +1,11 @@
+// Kopiert den Shaka Player ins Fenster-Verzeichnis (läuft nach "npm install").
+// So muss das fertige Programm nicht das ganze 80-MB-Paket mitschleppen.
+import fs from 'node:fs';
+import path from 'node:path';
+
+const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+const src = path.join(root, 'node_modules/shaka-player/dist/shaka-player.compiled.js');
+const dest = path.join(root, 'src/renderer/vendor/shaka-player.js');
+fs.mkdirSync(path.dirname(dest), { recursive: true });
+fs.copyFileSync(src, dest);
+console.log('Shaka Player →', path.relative(root, dest));

@@ -1,0 +1,39 @@
+{
+  "name": "gxtube-desktop",
+  "productName": "GX Tube",
+  "version": "0.1.0",
+  "description": "Werbefreier YouTube-Player für den PC – steuerbar mit der GX Tube Android-App",
+  "author": "Abilas Sivarajah",
+  "license": "GPL-3.0-or-later",
+  "private": true,
+  "type": "module",
+  "main": "src/main/main.js",
+  "desktopName": "gxtube-desktop.desktop",
+  "homepage": "https://github.com/abilas-sivarajah/adblock-tube-gx-desktop",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/abilas-sivarajah/adblock-tube-gx-desktop.git"
+  },
+  "scripts": {
+    "postinstall": "node scripts/vendor.mjs",
+    "start": "electron .",
+    "test": "node --test \"test/*.test.js\"",
+    "test:online": "GXTUBE_ONLINE_TESTS=1 node --test \"test/*.test.js\"",
+    "smoke": "node test-e2e/smoke.mjs",
+    "dist": "electron-builder --publish never",
+    "dist:win": "electron-builder --win --publish never",
+    "dist:linux": "electron-builder --linux --publish never",
+    "dist:mac": "electron-builder --mac --publish never"
+  },
+  "dependencies": {
+    "electron-updater": "6.8.9",
+    "ws": "8.22.0",
+    "youtubei.js": "18.1.0"
+  },
+  "devDependencies": {
+    "electron": "44.4.5",
+    "electron-builder": "26.16.1",
+    "playwright-core": "1.63.0",
+    "shaka-player": "5.2.12"
+  }
+}
