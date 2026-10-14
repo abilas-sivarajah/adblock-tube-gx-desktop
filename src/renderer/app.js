@@ -51,6 +51,9 @@ async function boot() {
   renderCastButton();
   renderHome();
   renderVolume();
+  state.update = await gx.updateStatus();
+  renderUpdate();
+  $('btnUpdate').addEventListener('click', () => gx.installUpdate());
   renderSpeedButton();
   renderFullscreenButton();
   $('autoplayToggle').checked = session.autoplay;
@@ -117,6 +120,10 @@ function bindEvents() {
     renderFullscreenButton();
   });
   gx.onShowWatch(() => setWatch('full'));
+  gx.onUpdateStatus((u) => {
+    state.update = u;
+    renderUpdate();
+  });
 }
 
 function onLoading({ token, video: v }) {
@@ -944,7 +951,8 @@ async function renderSettings() {
   f.append(el('h3', null, 'Programm'));
   f.append(toggleRow('Im Hintergrund weiterlaufen', 'Schließen legt GX Tube in den Infobereich – das Handy findet den PC dann weiterhin', 'closeToTray'));
   f.append(toggleRow('Mit dem Computer starten', 'Startet unsichtbar im Infobereich, bereit zum Streamen', 'openAtLogin'));
-  f.append(toggleRow('Automatische Updates', 'Neue Versionen von GitHub laden und beim Beenden installieren', 'autoUpdate'));
+  f.append(toggleRow('Automatische Updates', 'Stündlich auf GitHub nach neuen Versionen suchen und im Hintergrund laden', 'autoUpdate'));
+  f.append(updateRow());
   f.append(toggleRow('Verlauf speichern', 'Für „Weiter ansehen“ und Empfehlungen (nur auf diesem PC)', 'historyEnabled'));
   const clearRow = el('div', 'set-row');
   const clearLabel = el('div', 'label');
@@ -960,6 +968,66 @@ async function renderSettings() {
   const about = el('p', 'hint', `GX Tube Desktop ${info.version} – werbefrei über YouTube.js, nicht mit YouTube oder Google verbunden.`);
   about.style.marginTop = '24px';
   f.append(about);
+}
+
+// ------------------------------------------------------------------ Updates
+
+const RELEASES = 'https://github.com/abilas-sivarajah/adblock-tube-gx-desktop/releases/latest';
+
+function updateText(u) {
+  if (!u) return '';
+  switch (u.state) {
+    case 'unsupported': return u.reason;
+    case 'checking': return 'Suche nach neuer Version …';
+    case 'none': return 'Du hast die neueste Version.';
+    case 'downloading': return `Version ${u.version} wird geladen … ${u.percent ?? 0} %`;
+    case 'ready': return `Version ${u.version} ist bereit zum Installieren.`;
+    case 'error': return `Update-Suche fehlgeschlagen: ${u.error}`;
+    default: return 'Noch nicht gesucht.';
+  }
+}
+
+/** Zeile in den Einstellungen: Version, Status, "Jetzt suchen" bzw. "Neu starten & aktualisieren". */
+function updateRow() {
+  const row = el('div', 'set-row');
+  row.id = 'updateRow';
+  const label = el('div', 'label');
+  label.append(el('b', null, `Version ${state.update?.current ?? state.info?.version ?? ''}`), el('span', 'update-text', updateText(state.update)));
+  const btn = el('button', 'pill small');
+  btn.addEventListener('click', async () => {
+    const u = state.update;
+    if (u?.state === 'ready') gx.installUpdate();
+    else if (u?.state === 'unsupported') gx.openExternal(RELEASES);
+    else {
+      state.update = await gx.checkForUpdates();
+      renderUpdate();
+    }
+  });
+  row.append(label, btn);
+  fillUpdateButton(btn);
+  return row;
+}
+
+function fillUpdateButton(btn) {
+  const u = state.update;
+  btn.className = 'pill small' + (u?.state === 'ready' ? '' : ' ghost');
+  btn.disabled = u?.state === 'checking' || u?.state === 'downloading';
+  btn.textContent =
+    u?.state === 'ready' ? 'Neu starten & aktualisieren'
+      : u?.state === 'unsupported' ? 'Auf GitHub öffnen'
+        : u?.state === 'checking' ? 'Suche …'
+          : u?.state === 'downloading' ? 'Lädt …'
+            : 'Jetzt nach Updates suchen';
+}
+
+function renderUpdate() {
+  const u = state.update;
+  $('btnUpdate').hidden = u?.state !== 'ready';
+  if (u?.state === 'ready') $('btnUpdate').title = `Version ${u.version} installieren und GX Tube neu starten`;
+  const row = $('updateRow');
+  if (!row) return;
+  row.querySelector('.update-text').textContent = updateText(u);
+  fillUpdateButton(row.querySelector('button'));
 }
 
 // ------------------------------------------------------------------ Hinweise

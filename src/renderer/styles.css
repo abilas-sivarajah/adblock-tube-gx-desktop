@@ -149,6 +149,8 @@ svg.i { width: 24px; height: 24px; fill: currentColor; display: block; }
 .cats label { display: inline-flex; gap: 6px; align-items: center; padding: 6px 12px; border-radius: 16px; background: var(--chip); cursor: pointer; }
 .pill { padding: 8px 16px; border-radius: 18px; background: var(--text); color: #0f0f0f; font-weight: 600; }
 .pill.small { padding: 5px 12px; font-size: 13px; }
+.pill:disabled { opacity: .6; cursor: default; }
+.update-pill { align-self: center; margin-right: 6px; background: var(--cyan); color: #0f0f0f; }
 .pill.ghost { background: var(--chip); color: var(--text); }
 
 .toggle { position: relative; width: 40px; height: 22px; flex: none; }

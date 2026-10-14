@@ -10,7 +10,7 @@ import { CastServer } from './cast-server.js';
 import { Session } from './session.js';
 import { Store, lanAddresses } from './store.js';
 import { sanitizeVideo } from './protocol.js';
-import { setupUpdates } from './updater.js';
+import { checkForUpdates, installUpdate, setupUpdates, updateStatus } from './updater.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const assets = path.join(here, '..', 'assets');
@@ -31,6 +31,7 @@ if (!app.requestSingleInstanceLock()) {
 /** @type {BrowserWindow | null} */
 let win = null;
 let tray = null;
+let updates = null;
 let quitting = false;
 let store;
 let server;
@@ -105,7 +106,7 @@ async function start() {
   createWindow();
   createTray();
   applyLoginItem();
-  setupUpdates({ enabled: () => store.settings.autoUpdate, toast });
+  updates = setupUpdates({ enabled: () => store.settings.autoUpdate, toast, onStatus: (s) => send('update:status', s) });
 }
 
 app.on('before-quit', () => {
@@ -169,6 +170,7 @@ function showWindow() {
   if (win.isMinimized()) win.restore();
   win.show();
   win.focus();
+  updates?.onWindowShown();
 }
 
 function send(channel, payload) {
@@ -572,6 +574,9 @@ function setupIpc() {
   ipcMain.on('window:fullscreen', (_e, on) => win?.setFullScreen(Boolean(on)));
   ipcMain.handle('window:isFullscreen', () => Boolean(win?.isFullScreen()));
   ipcMain.on('clients:kick', (_e, id) => server?.kick(Number(id)));
+  ipcMain.handle('update:status', () => updateStatus());
+  ipcMain.handle('update:check', () => checkForUpdates(true));
+  ipcMain.handle('update:install', () => installUpdate());
   ipcMain.on('open:external', (_e, url) => {
     if (typeof url === 'string' && /^https:\/\/(www\.)?(youtube\.com|youtu\.be|github\.com)\//.test(url)) shell.openExternal(url);
   });

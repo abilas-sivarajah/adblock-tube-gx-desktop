@@ -37,6 +37,9 @@ contextBridge.exposeInMainWorld('gx', {
   isFullscreen: () => ipcRenderer.invoke('window:isFullscreen'),
   kick: (id) => ipcRenderer.send('clients:kick', id),
   openExternal: (url) => ipcRenderer.send('open:external', url),
+  updateStatus: () => ipcRenderer.invoke('update:status'),
+  checkForUpdates: () => ipcRenderer.invoke('update:check'),
+  installUpdate: () => ipcRenderer.invoke('update:install'),
 
   onLoading: on('player:loading'),
   onSource: on('player:source'),
@@ -53,4 +56,5 @@ contextBridge.exposeInMainWorld('gx', {
   onSettings: on('settings'),
   onFullscreen: on('window:fullscreen'),
   onShowWatch: on('ui:watch'),
+  onUpdateStatus: on('update:status'),
 });
