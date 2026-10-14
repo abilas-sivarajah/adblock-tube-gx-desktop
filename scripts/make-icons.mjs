@@ -3,8 +3,9 @@
 import { chromium } from 'playwright-core';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const svg = (name) => fs.readFileSync(path.join(root, 'src/assets', name), 'utf8');
 const jobs = [
   { svg: 'icon.svg', out: 'build/icon.png', w: 512, h: 512 },
