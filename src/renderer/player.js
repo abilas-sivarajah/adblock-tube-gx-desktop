@@ -37,7 +37,7 @@ export class Player {
     this.shaka.addEventListener('buffering', (e) => {
       if (!this.token) return;
       if (e.buffering) this.#setStatus('buffering');
-      else this.#setStatus(this.video.paused ? 'paused' : 'playing');
+      else if (this.status !== 'loading') this.#setStatus(this.video.paused ? 'paused' : 'playing');
     });
     this.#configure();
 
@@ -46,7 +46,8 @@ export class Player {
     v.playbackRate = speed;
     v.addEventListener('playing', () => this.#setStatus('playing'));
     v.addEventListener('pause', () => {
-      if (!v.ended && this.token) this.#setStatus('paused');
+      // Beim Laden/Umschalten feuert das Video ein "pause" – das ist keine Pause des Nutzers
+      if (!v.ended && this.token && this.status !== 'loading') this.#setStatus('paused');
     });
     v.addEventListener('waiting', () => this.token && this.#setStatus('buffering'));
     v.addEventListener('ended', () => {
@@ -87,7 +88,8 @@ export class Player {
     if (!uri.includes('.googlevideo.com/')) return;
     const range = request.headers.Range ?? request.headers.range;
     if (!range) return;
-    const m = /bytes=(\d+)-(\d*)/.exec(range);
+    // Nur geschlossene Bereiche umschreiben; offene ("ab Byte N") bleiben als Header
+    const m = /bytes=(\d+)-(\d+)/.exec(range);
     if (!m) return;
     const url = new URL(uri);
     url.searchParams.set('range', `${m[1]}-${m[2]}`);
@@ -154,6 +156,7 @@ export class Player {
 
   async load({ token, stream, startMs, maxQuality }) {
     const seq = ++this.loadSeq;
+    this.httpErrors = [];
     this.token = token;
     this.isLive = stream.kind === 'hls';
     this.fixedHeight = 0;
@@ -190,15 +193,29 @@ export class Player {
   #onShakaError(err) {
     if (!this.token) return;
     const code = err?.code;
-    console.warn('Player-Fehler', code, err);
     const http = code === 1001 || code === 1002 || code === 1003;
+    const status = code === 1001 ? err?.data?.[1] : null;
+    // Shaka meldet Ladefehler als "behebbar" und versucht es endlos weiter. Ein einzelner Aussetzer
+    // ist egal – lehnt YouTube aber ab (403) oder scheitert es wiederholt, hilft nur ein anderer Client.
+    if (err?.severity !== undefined && err.severity !== shaka.util.Error.Severity.CRITICAL) {
+      if (!http) return;
+      const now = Date.now();
+      this.httpErrors = (this.httpErrors ?? []).filter((t) => now - t < 30_000);
+      this.httpErrors.push(now);
+      if (status !== 403 && status !== 410 && this.httpErrors.length < 3) {
+        console.warn('Player-Hinweis', code, status ?? '');
+        return;
+      }
+    }
+    this.httpErrors = [];
+    console.warn('Player-Fehler', code, status ?? '');
     const message = http
       ? 'YouTube hat den Stream abgelehnt.'
       : code === 3016 || code === 3014 || code === 3015
         ? 'Dieses Videoformat kann nicht abgespielt werden.'
         : `Wiedergabefehler (${code ?? 'unbekannt'})`;
     this.status = 'error';
-    window.gx.failed({ token: this.token, positionMs: this.positionMs, message });
+    window.gx.failed({ token: this.token, positionMs: this.positionMs, message, http });
   }
 
   // ---------------------------------------------------------------- SponsorBlock

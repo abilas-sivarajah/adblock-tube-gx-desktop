@@ -253,9 +253,11 @@ class StreamError extends Error {
   }
 }
 
-async function urlWorks(url, fetchImpl) {
+/** Prüft ein kleines Stück der Datei ab [offset] – YouTube sperrt manchmal erst weiter hinten oder höhere Qualitäten. */
+async function urlWorks(url, fetchImpl, offset = 0) {
   try {
-    const r = await fetchImpl(url + (url.includes('?') ? '&' : '?') + 'range=0-1023', { method: 'GET' });
+    const start = Math.max(0, Math.floor(offset));
+    const r = await fetchImpl(url + (url.includes('?') ? '&' : '?') + `range=${start}-${start + 1023}`, { method: 'GET' });
     await r.arrayBuffer().catch(() => {});
     return r.ok;
   } catch {
@@ -263,12 +265,31 @@ async function urlWorks(url, fetchImpl) {
   }
 }
 
+// Clients, deren Streams kürzlich mitten im Video abgelehnt wurden, kommen eine Weile ans Ende.
+const clientFailures = new Map(); // Client → Zeitpunkt
+const FAILURE_PENALTY_MS = 60 * 60 * 1000;
+
+export function reportClientFailure(clientName) {
+  if (clientName) clientFailures.set(clientName, Date.now());
+}
+
+export function preferredClients(exclude = []) {
+  const now = Date.now();
+  const recentlyFailed = (c) => now - (clientFailures.get(c) ?? 0) < FAILURE_PENALTY_MS;
+  const usable = STREAM_CLIENTS.filter((c) => !exclude.includes(c));
+  return [...usable.filter((c) => !recentlyFailed(c)), ...usable.filter(recentlyFailed)];
+}
+
 /**
  * Sucht einen YouTube-Client, dessen Stream-Adressen wirklich abspielbar sind,
  * und baut daraus ein DASH-Manifest (getrennte Video- und Tonspur) bzw. nimmt
  * bei Live-Streams die HLS-Adresse.
+ *
+ * Geprüft wird die beste Videospur bis [maxHeight] mitten in der Datei: Manche Clients
+ * liefern ohne "PO-Token" nur den Anfang oder nur niedrige Qualitäten.
+ * [exclude]: Clients, die bei diesem Video schon versagt haben.
  */
-export async function stream(id, { clients = STREAM_CLIENTS, check = true } = {}) {
+export async function stream(id, { maxHeight = 1080, exclude = [], clients = preferredClients(exclude), check = true } = {}) {
   if (!VIDEO_ID.test(id)) throw new Error('Ungültige Video-ID');
   const yt = await client().catch((e) => Promise.reject(friendlyError(e)));
   const fetchImpl = options.fetch ?? globalThis.fetch;
@@ -300,21 +321,34 @@ export async function stream(id, { clients = STREAM_CLIENTS, check = true } = {}
         continue;
       }
       const formats = sd?.adaptive_formats ?? [];
-      const video = formats.filter((f) => f.has_video).sort((a, c) => (c.height || 0) - (a.height || 0))[0];
-      const audio = formats.find((f) => f.has_audio && !f.has_video);
+      const videos = formats.filter((f) => f.has_video && !f.has_audio);
+      // Höchste erlaubte Auflösung; gibt es nichts darunter, die kleinste vorhandene
+      const fitting = videos.filter((f) => (f.height || 0) <= maxHeight);
+      const pool = fitting.length ? fitting : videos.sort((a, c) => (a.height || 0) - (c.height || 0)).slice(0, 1);
+      const video = pool.sort((a, c) => (c.height || 0) - (a.height || 0) || (c.bitrate || 0) - (a.bitrate || 0))[0];
+      const audio = formats.filter((f) => f.has_audio && !f.has_video).sort((a, c) => (c.bitrate || 0) - (a.bitrate || 0))[0];
       if (!video || !audio) {
         reasons.push(`${clientName}: keine Streams`);
         continue;
       }
       if (check) {
-        const testUrl = await audio.decipher(yt.session.player);
-        if (!(await urlWorks(testUrl, fetchImpl))) {
-          reasons.push(`${clientName}: Stream gesperrt`);
+        const [videoUrl, audioUrl] = await Promise.all([video.decipher(yt.session.player), audio.decipher(yt.session.player)]);
+        const middle = (f) => (Number(f.content_length) || 0) * 0.5;
+        const [videoOk, audioOk] = await Promise.all([
+          urlWorks(videoUrl, fetchImpl, middle(video)),
+          urlWorks(audioUrl, fetchImpl, middle(audio)),
+        ]);
+        if (!videoOk || !audioOk) {
+          reasons.push(`${clientName}: Stream gesperrt (${!videoOk ? `Video ${video.height}p` : 'Ton'})`);
           continue;
         }
       }
-      const manifest = await info.toDash();
-      return { ...meta, kind: 'dash', manifest };
+      const cap = video.height || maxHeight;
+      const manifest = await info.toDash({
+        // Nur Videospuren bis zur geprüften Auflösung – darüber sperrt YouTube manchmal
+        format_filter: (f) => f.has_video && (f.height || 0) > cap,
+      });
+      return { ...meta, kind: 'dash', manifest, maxHeight: cap };
     } catch (e) {
       reasons.push(`${clientName}: ${e?.message?.split('\n')[0] || e}`);
     }

@@ -40,3 +40,14 @@ test('Online: Suche und Stream (nur mit GXTUBE_ONLINE_TESTS=1)', { skip: !proces
   assert.equal(s.kind, 'dash');
   assert.match(s.manifest, /<MPD/);
 });
+
+test('Clients, die mitten im Video abgelehnt wurden, kommen ans Ende', async () => {
+  const yt = await import('../src/main/youtube.js');
+  const first = yt.STREAM_CLIENTS[0];
+  assert.equal(yt.preferredClients()[0], first);
+  yt.reportClientFailure(first);
+  const order = yt.preferredClients();
+  assert.equal(order.at(-1), first);
+  assert.equal(order.length, yt.STREAM_CLIENTS.length);
+  assert.ok(!yt.preferredClients([yt.STREAM_CLIENTS[1]]).includes(yt.STREAM_CLIENTS[1]));
+});

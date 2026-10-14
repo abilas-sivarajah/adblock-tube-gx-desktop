@@ -86,6 +86,10 @@ npm start               # App starten
 npm test                # Unit-Tests
 npm run smoke           # App starten und wie das Handy fernsteuern (Linux ohne Bildschirm: xvfb-run npm run smoke)
 npm run dist:win        # Windows-Installer → dist/  (auch dist:linux, dist:mac)
+
+# Fehlersuche: Video wie vom Handy abspielen, abgelehnte Anfragen anzeigen
+npm run debug:play -- <Video-ID> [Sekunden]
+BLOCK_CLIENT=IOS npm run debug:play -- dQw4w9WgXcQ 60   # simuliert eine YouTube-Sperre → Wechsel auf den nächsten Client
 ```
 
 ## 🧩 Technik
@@ -93,7 +97,7 @@ npm run dist:win        # Windows-Installer → dist/  (auch dist:linux, dist:ma
 | | |
 |---|---|
 | Programm | Electron, Oberfläche in reinem HTML/CSS/JS (ohne Framework) |
-| YouTube-Daten | YouTube.js (InnerTube): Suche, Vorschläge, Details, ähnliche Videos. Streams über mehrere YouTube-Clients (iOS, Mobile Web, TV …), der erste funktionierende gewinnt |
+| YouTube-Daten | YouTube.js (InnerTube): Suche, Vorschläge, Details, ähnliche Videos. Streams über mehrere YouTube-Clients (iOS, Mobile Web, TV …): Vor dem Abspielen wird die gewählte Qualität mitten in der Datei geprüft; lehnt YouTube während der Wiedergabe ab, geht es an derselben Stelle mit dem nächsten Client weiter |
 | Player | Shaka Player: Video- und Tonspur getrennt als DASH, Live-Streams als HLS |
 | Fernsteuerung | WebSocket (Port 8765) + UDP-Suche (Port 8766), siehe **[PROTOCOL.md](PROTOCOL.md)** |
 | Werbung im Video | SponsorBlock-API (Abfrage über Hash-Präfix, die Video-ID bleibt privat) |

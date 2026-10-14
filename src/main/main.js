@@ -246,29 +246,51 @@ function setupMediaHeaders() {
   });
 }
 
-async function loadVideo({ video, startMs }) {
-  saveProgress();
+/**
+ * Video laden. [exclude]: YouTube-Clients, deren Stream bei diesem Video schon abgelehnt
+ * wurde ([fallback] = gleiches Video, nur anderer Client – Details/SponsorBlock bleiben).
+ */
+async function loadVideo({ video, startMs, exclude = [], fallback = false }) {
+  const previous = fallback && current?.video.id === video.id ? current : null;
+  if (!previous) saveProgress();
   const token = ++loadToken;
   const resume = startMs ?? store.resumePosition(video.id);
-  current = { token, video, startMs: resume, segments: [], error: null, stream: null, retried: false };
-  playback = { ...playback, status: 'loading', positionMs: resume, durationMs: Math.max(0, video.durationSec * 1000), bufferedMs: 0 };
-  store.recordWatch(video);
+  current = {
+    token,
+    video,
+    startMs: resume,
+    segments: previous?.segments ?? [],
+    details: previous?.details ?? null,
+    error: null,
+    stream: null,
+    exclude,
+    attempts: (previous?.attempts ?? 0) + (previous ? 1 : 0),
+  };
+  playback = { ...playback, status: 'loading', positionMs: resume, durationMs: previous ? playback.durationMs : Math.max(0, video.durationSec * 1000), bufferedMs: 0 };
+  if (!previous) store.recordWatch(video);
   send('player:loading', { token, video, startMs: resume });
   broadcastState();
   updateTray();
 
-  // Details (Titel, ähnliche Videos) und SponsorBlock parallel zum Stream
-  YT.details(video.id)
-    .then((d) => {
-      if (token !== loadToken) return;
-      session.setRelated(video.id, d.related);
-      store.addRecommendations(d.related.slice(0, 12));
-      const enriched = { ...video, title: d.title || video.title, channelName: d.channelName || video.channelName, durationSec: d.durationSec > 0 ? d.durationSec : video.durationSec, isLive: d.isLive };
-      updateCurrentVideo(enriched);
-      send('player:details', { token, details: { ...d, related: d.related.slice(0, 20) } });
-    })
-    .catch(() => {});
-  if (store.settings.sponsorBlock && !video.isLive) {
+  if (previous) {
+    // Gleiches Video mit anderem Client: Bekanntes gleich wieder anzeigen
+    if (current.details) send('player:details', { token, details: current.details });
+    if (current.segments.length) send('player:segments', { token, segments: current.segments });
+  } else {
+    // Details (Titel, ähnliche Videos) und SponsorBlock parallel zum Stream
+    YT.details(video.id)
+      .then((d) => {
+        if (token !== loadToken) return;
+        session.setRelated(video.id, d.related);
+        store.addRecommendations(d.related.slice(0, 12));
+        const enriched = { ...video, title: d.title || video.title, channelName: d.channelName || video.channelName, durationSec: d.durationSec > 0 ? d.durationSec : video.durationSec, isLive: d.isLive };
+        updateCurrentVideo(enriched);
+        current.details = { ...d, related: d.related.slice(0, 20) };
+        send('player:details', { token, details: current.details });
+      })
+      .catch(() => {});
+  }
+  if (!previous && store.settings.sponsorBlock && !video.isLive) {
     SponsorBlock.segments(video.id, store.settings.sponsorCategories, (u, i) => net.fetch(u, i)).then((segments) => {
       if (token !== loadToken) return;
       current.segments = segments;
@@ -278,9 +300,10 @@ async function loadVideo({ video, startMs }) {
   }
 
   try {
-    const stream = await YT.stream(video.id);
+    const stream = await YT.stream(video.id, { maxHeight: store.settings.maxQuality, exclude });
     if (token !== loadToken) return;
     current.stream = stream;
+    current.resolvedAt = Date.now();
     updateCurrentVideo({ ...video, title: stream.title || video.title, channelName: stream.channelName || video.channelName, durationSec: stream.durationSec > 0 ? stream.durationSec : video.durationSec, isLive: stream.isLive });
     send('player:source', { token, video: current.video, stream, startMs: stream.isLive ? null : resume, maxQuality: store.settings.maxQuality });
   } catch (err) {
@@ -488,7 +511,7 @@ function setupIpc() {
   ipcMain.on('session:clearUpcoming', () => session.clearUpcoming());
   ipcMain.on('session:stop', () => session.clear());
   ipcMain.on('session:retry', () => {
-    if (current) loadVideo({ video: current.video, startMs: playback.positionMs || current.startMs, reason: 'retry' });
+    if (current) loadVideo({ video: current.video, startMs: playback.positionMs || current.startMs });
   });
 
   ipcMain.on('player:report', (_e, report) => {
@@ -525,12 +548,19 @@ function setupIpc() {
       setPowerBlock(false);
     }
   });
-  // Stream-Adresse abgelaufen / abgelehnt: einmal frisch laden
-  ipcMain.on('player:failed', (_e, { token, positionMs, message }) => {
+  // YouTube hat den Stream mitten im Video abgelehnt (oder die Adresse ist abgelaufen):
+  // an derselben Stelle mit dem nächsten YouTube-Client weitermachen.
+  ipcMain.on('player:failed', (_e, { token, positionMs, message, http }) => {
     if (!current || token !== current.token) return;
-    if (!current.retried) {
-      loadVideo({ video: current.video, startMs: Number(positionMs) || 0, reason: 'retry' });
-      current.retried = true; // gilt für den gerade gestarteten neuen Ladevorgang
+    const used = current.stream?.client;
+    // Nach langer Pause sind die Adressen einfach abgelaufen – dann ist der Client nicht schuld
+    const expired = current.resolvedAt && Date.now() - current.resolvedAt > 45 * 60 * 1000;
+    const exclude = used && !expired ? [...current.exclude, used] : current.exclude;
+    if (http && used && !expired) YT.reportClientFailure(used);
+    const left = YT.STREAM_CLIENTS.filter((c) => !exclude.includes(c)).length;
+    if (left > 0 && current.attempts < YT.STREAM_CLIENTS.length) {
+      console.warn(`[stream] ${used ?? '?'} abgelehnt bei ${Math.round((Number(positionMs) || 0) / 1000)} s – nächster Client`);
+      loadVideo({ video: current.video, startMs: Number(positionMs) || 0, exclude, fallback: true });
       return;
     }
     current.error = message || 'Wiedergabefehler';
