@@ -658,7 +658,7 @@ function renderStatus(status) {
   $('errorBox').hidden = status !== 'error';
   $('errorText').textContent = state.error ?? 'Wiedergabefehler';
   const reasons = status === 'error' ? state.errorDetails ?? [] : [];
-  $('errorDetails').hidden = reasons.length === 0;
+  $('errorReasons').hidden = reasons.length === 0;
   $('errorReasons').replaceChildren(...reasons.map((r) => el('li', null, r)));
   if (status === 'paused' || status === 'ended' || status === 'error') $('controls').classList.add('show');
   else showControls();

@@ -349,33 +349,43 @@ export async function stream(id, { maxHeight = 1080, exclude = [], clients = pre
       }
       const formats = sd?.adaptive_formats ?? [];
       const videos = formats.filter((f) => f.has_video && !f.has_audio);
-      // Höchste erlaubte Auflösung; gibt es nichts darunter, die kleinste vorhandene
-      const fitting = videos.filter((f) => (f.height || 0) <= maxHeight);
-      const pool = fitting.length ? fitting : videos.sort((a, c) => (a.height || 0) - (c.height || 0)).slice(0, 1);
-      const video = pool.sort((a, c) => (c.height || 0) - (a.height || 0) || (c.bitrate || 0) - (a.bitrate || 0))[0];
       const audio = formats.filter((f) => f.has_audio && !f.has_video).sort((a, c) => (c.bitrate || 0) - (a.bitrate || 0))[0];
-      if (!video || !audio) {
-        reasons.push(`${clientName}: keine Streams`);
-        continue;
-      }
-      if (check) {
-        const [videoUrl, audioUrl] = await Promise.all([video.decipher(yt.session.player), audio.decipher(yt.session.player)]);
-        const middle = (f) => (Number(f.content_length) || 0) * 0.5;
-        const [videoOk, audioOk] = await Promise.all([
-          urlWorks(videoUrl, fetchImpl, middle(video)),
-          urlWorks(audioUrl, fetchImpl, middle(audio)),
-        ]);
-        if (!videoOk || !audioOk) {
-          reasons.push(`${clientName}: Stream gesperrt (${!videoOk ? `Video ${video.height}p` : 'Ton'})`);
-          continue;
+      // Video mit Ton in einer Datei (meist 360p) – liefert YouTube fast immer
+      const muxed = (sd?.formats ?? []).filter((f) => f.has_video && f.has_audio).sort((a, c) => (c.height || 0) - (a.height || 0))[0];
+      const middle = (f) => (Number(f.content_length) || 0) * 0.5;
+      const works = async (f) => !check || urlWorks(await f.decipher(yt.session.player), fetchImpl, middle(f));
+
+      // Beste Auflösung bis maxHeight, die YouTube wirklich ausliefert – manche Clients sperren
+      // höhere Qualitäten (ohne passendes Token), niedrigere gehen dann meist noch.
+      const heights = [...new Set(videos.map((f) => f.height || 0))].filter((h) => h > 0 && h <= maxHeight).sort((a, b) => b - a);
+      if (!heights.length && videos.length) heights.push(Math.min(...videos.map((f) => f.height || 0)));
+      const audioOk = audio ? await works(audio) : false;
+      const tried = [];
+      let video = null;
+      if (audioOk) {
+        for (const h of heights.slice(0, 5)) {
+          const candidate = videos.filter((f) => f.height === h).sort((a, c) => (c.bitrate || 0) - (a.bitrate || 0))[0];
+          tried.push(`${h}p`);
+          if (await works(candidate)) {
+            video = candidate;
+            break;
+          }
         }
       }
-      const cap = video.height || maxHeight;
-      const manifest = await info.toDash({
-        // Nur Videospuren bis zur geprüften Auflösung – darüber sperrt YouTube manchmal
-        format_filter: (f) => f.has_video && (f.height || 0) > cap,
-      });
-      return { ...meta, kind: 'dash', manifest, maxHeight: cap, poToken: Boolean(po) };
+      if (video) {
+        const cap = video.height;
+        const manifest = await info.toDash({
+          // Nur Videospuren bis zur geprüften Auflösung – darüber sperrt YouTube
+          format_filter: (f) => f.has_video && (f.height || 0) > cap,
+        });
+        return { ...meta, kind: 'dash', manifest, maxHeight: cap, poToken: Boolean(po), note: tried.length > 1 ? `höhere Qualität gesperrt (${tried.slice(0, -1).join(', ')})` : null };
+      }
+      if (muxed && (await works(muxed))) {
+        return { ...meta, kind: 'progressive', url: await muxed.decipher(yt.session.player), maxHeight: muxed.height, poToken: Boolean(po), note: 'nur Datei mit Ton (niedrige Qualität)' };
+      }
+      const what = !audio ? 'keine Tonspur' : !audioOk ? 'Ton' : `Video ${tried.join(', ') || 'keine Spur'}`;
+      reasons.push(`${clientName}: Stream gesperrt (${what}${muxed ? ', auch die 360p-Datei' : ''})`);
+      continue;
     } catch (e) {
       reasons.push(`${clientName}: ${e?.message?.split('\n')[0] || e}`);
     } finally {

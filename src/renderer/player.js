@@ -167,6 +167,9 @@ export class Player {
       if (stream.kind === 'dash') {
         const uri = 'data:application/dash+xml;base64,' + btoa(unescape(encodeURIComponent(stream.manifest)));
         await this.shaka.load(uri, startMs ? startMs / 1000 : null, 'application/dash+xml');
+      } else if (stream.kind === 'progressive') {
+        // Eine Datei mit Video und Ton – spielt der Browser selbst ab
+        await this.shaka.load(stream.url, startMs ? startMs / 1000 : null, 'video/mp4');
       } else {
         await this.shaka.load(stream.url, null, 'application/x-mpegurl');
       }

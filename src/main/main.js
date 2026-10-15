@@ -316,7 +316,7 @@ async function loadVideo({ video, startMs, exclude = [], fallback = false }) {
     if (token !== loadToken) return;
     current.stream = stream;
     current.resolvedAt = Date.now();
-    console.info(`[stream] ${video.id} über ${stream.client}${stream.poToken ? ' mit PO-Token' : ''}`);
+    console.info(`[stream] ${video.id} über ${stream.client}${stream.poToken ? ' mit PO-Token' : ''}, bis ${stream.maxHeight}p${stream.note ? ` – ${stream.note}` : ''}`);
     updateCurrentVideo({ ...video, title: stream.title || video.title, channelName: stream.channelName || video.channelName, durationSec: stream.durationSec > 0 ? stream.durationSec : video.durationSec, isLive: stream.isLive });
     send('player:source', { token, video: current.video, stream, startMs: stream.isLive ? null : resume, maxQuality: store.settings.maxQuality });
   } catch (err) {

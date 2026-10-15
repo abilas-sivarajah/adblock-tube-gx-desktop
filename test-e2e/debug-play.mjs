@@ -18,6 +18,16 @@ win.on('console', (m) => { if (m.type() !== 'log') console.log('[fenster]', m.ty
 win.on('response', (r) => { if (r.url().includes('googlevideo') && r.status() >= 400) console.log('[http]', r.status(), r.url().replace(/\?.*?(itag=\d+).*?(range=[\d-]+)?.*/, '?$1 $2').slice(0, 160)); });
 win.on('requestfailed', (r) => { if (r.url().includes('googlevideo')) console.log('[failed]', r.failure()?.errorText, 'c=' + new URL(r.url()).searchParams.get('c')); });
 await win.waitForSelector('#castHero h1');
+// BLOCK_ITAGS=137,248 sperrt diese Formate von Anfang an; BLOCK_ITAGS=adaptive sperrt alles außer der 360p-Datei (18)
+if (process.env.BLOCK_ITAGS) {
+  await app.evaluate(({ session }, list) => {
+    const block = (itag) => (list === 'adaptive' ? itag !== '18' : list.split(',').includes(itag));
+    session.defaultSession.webRequest.onBeforeRequest({ urls: ['https://*.googlevideo.com/*'] }, (d, cb) => {
+      cb({ cancel: block(new URL(d.url).searchParams.get('itag')) });
+    });
+  }, process.env.BLOCK_ITAGS);
+  console.log('[test] sperre Formate', process.env.BLOCK_ITAGS);
+}
 // BLOCK_CLIENT=IOS: nach 8 s alle Video-Anfragen dieses Clients abweisen (simuliert YouTubes Sperre)
 if (process.env.BLOCK_CLIENT) {
   await app.evaluate(({ session }, client) => {
@@ -46,6 +56,11 @@ await new Promise((r) => setTimeout(r, 500));
 ws.send(JSON.stringify({ type: 'play', video: { id: VIDEO } }));
 await new Promise((r) => setTimeout(r, SECONDS * 1000));
 console.log('[ende]', last);
+if (await win.isVisible('#errorBox')) {
+  console.log('[fehler-gründe]', (await win.locator('#errorReasons li').allTextContents()).join(' | '));
+  await win.screenshot({ path: path.join(root, 'test-e2e/out/debug-error.png') });
+  await win.click('#btnRetry', { timeout: 3000 }).then(() => console.log('[klick] Erneut versuchen geht'), (e) => console.log('[klick] FEHLER', e.message.split('\n')[0]));
+}
 await win.screenshot({ path: path.join(root, 'test-e2e/out/debug.png') });
 await app.close();
 fs.rmSync(ud, { recursive: true, force: true });
