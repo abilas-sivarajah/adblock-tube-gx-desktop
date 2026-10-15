@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as YT from './youtube.js';
 import * as SponsorBlock from './sponsorblock.js';
+import * as PoToken from './potoken.js';
 import { CastServer } from './cast-server.js';
 import { Session } from './session.js';
 import { Store, lanAddresses } from './store.js';
@@ -59,6 +60,7 @@ async function start() {
     location: 'DE',
     fetch: (input, init) => net.fetch(input instanceof URL ? input.toString() : input, init),
     cacheDir: path.join(app.getPath('userData'), 'yt-cache'),
+    poTokens: { available: PoToken.available, mint: PoToken.mint },
   });
   YT.client().catch(() => {}); // Player-Skript schon mal laden
 
@@ -107,10 +109,13 @@ async function start() {
   createTray();
   applyLoginItem();
   updates = setupUpdates({ enabled: () => store.settings.autoUpdate, toast, onStatus: (s) => send('update:status', s) });
+  // BotGuard schon mal im Hintergrund starten, damit das erste Video nicht wartet
+  setTimeout(() => PoToken.warmUp(), 3000);
 }
 
 app.on('before-quit', () => {
   quitting = true;
+  PoToken.dispose();
   saveProgress();
   store?.saveLibraryNow();
   server?.stop();
@@ -155,6 +160,11 @@ function createWindow() {
       // Verstecktes Fenster: Video anhalten, Empfang fürs Handy bleibt an
       send('player:command', { type: 'pause' });
     }
+  });
+  // Unsichtbares BotGuard-Fenster darf das Beenden nicht verhindern
+  win.on('closed', () => {
+    PoToken.dispose();
+    win = null;
   });
   win.on('enter-full-screen', () => send('window:fullscreen', true));
   win.on('leave-full-screen', () => send('window:fullscreen', false));
@@ -306,6 +316,7 @@ async function loadVideo({ video, startMs, exclude = [], fallback = false }) {
     if (token !== loadToken) return;
     current.stream = stream;
     current.resolvedAt = Date.now();
+    console.info(`[stream] ${video.id} über ${stream.client}${stream.poToken ? ' mit PO-Token' : ''}`);
     updateCurrentVideo({ ...video, title: stream.title || video.title, channelName: stream.channelName || video.channelName, durationSec: stream.durationSec > 0 ? stream.durationSec : video.durationSec, isLive: stream.isLive });
     send('player:source', { token, video: current.video, stream, startMs: stream.isLive ? null : resume, maxQuality: store.settings.maxQuality });
   } catch (err) {
@@ -313,7 +324,7 @@ async function loadVideo({ video, startMs, exclude = [], fallback = false }) {
     console.warn('Stream-Fehler', err?.reasons ?? err);
     current.error = err?.message ?? 'Video konnte nicht geladen werden';
     playback = { ...playback, status: 'error' };
-    send('player:error', { token, message: current.error });
+    send('player:error', { token, message: current.error, details: Array.isArray(err?.reasons) ? err.reasons : [] });
     broadcastState();
   }
 }
@@ -560,7 +571,8 @@ function setupIpc() {
     const exclude = used && !expired ? [...current.exclude, used] : current.exclude;
     if (http && used && !expired) YT.reportClientFailure(used);
     const left = YT.STREAM_CLIENTS.filter((c) => !exclude.includes(c)).length;
-    if (left > 0 && current.attempts < YT.STREAM_CLIENTS.length) {
+    // Höchstens zweimal wechseln – viele Anfragen hintereinander lösen bei YouTube die Bot-Sperre aus
+    if (left > 0 && current.attempts < 2) {
       console.warn(`[stream] ${used ?? '?'} abgelehnt bei ${Math.round((Number(positionMs) || 0) / 1000)} s – nächster Client`);
       loadVideo({ video: current.video, startMs: Number(positionMs) || 0, exclude, fallback: true });
       return;

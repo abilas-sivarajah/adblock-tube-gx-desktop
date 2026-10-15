@@ -18,11 +18,16 @@ Platform.shim.eval = async (data, env) => {
  * Reihenfolge der YouTube-Clients für die Streams. Nicht jeder liefert jedes Video,
  * und YouTube sperrt mal den einen, mal den anderen – also der Reihe nach probieren.
  */
-export const STREAM_CLIENTS = ['IOS', 'MWEB', 'TV_SIMPLY', 'ANDROID_VR', 'TV'];
+export const STREAM_CLIENTS = ['MWEB', 'IOS', 'TV_SIMPLY', 'ANDROID_VR', 'TV'];
+
+// Diese Clients bekommen ein PO-Token (wie YouTube im Browser), wenn eins erzeugt werden kann
+const PO_CLIENTS = new Set(['MWEB', 'WEB']);
+const BOT_REASON = /bot|sign in|anmelden|confirm you/i;
 
 export const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
 
-let options = { lang: 'de', location: 'DE', fetch: undefined, cacheDir: undefined };
+// poTokens: { available(): boolean, mint(binding): Promise<string> } – siehe potoken.js
+let options = { lang: 'de', location: 'DE', fetch: undefined, cacheDir: undefined, poTokens: null };
 let clientPromise = null;
 const searches = new Map();
 let searchCounter = 0;
@@ -265,6 +270,21 @@ async function urlWorks(url, fetchImpl, offset = 0) {
   }
 }
 
+/** PO-Tokens für Web-Clients: [session] gebunden an die Visitor-ID, [content] an die Video-ID. */
+async function poTokensFor(yt, clientName, id) {
+  const provider = options.poTokens;
+  if (!PO_CLIENTS.has(clientName) || !provider?.available()) return null;
+  const visitor = yt.session.context.client.visitorData;
+  try {
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('PO-Token dauert zu lange')), 8000));
+    const [session, content] = await Promise.race([Promise.all([provider.mint(visitor), provider.mint(id)]), timeout]);
+    return { session, content };
+  } catch (e) {
+    console.warn('[potoken]', e?.message ?? e);
+    return null;
+  }
+}
+
 // Clients, deren Streams kürzlich mitten im Video abgelehnt wurden, kommen eine Weile ans Ende.
 const clientFailures = new Map(); // Client → Zeitpunkt
 const FAILURE_PENALTY_MS = 60 * 60 * 1000;
@@ -294,14 +314,21 @@ export async function stream(id, { maxHeight = 1080, exclude = [], clients = pre
   const yt = await client().catch((e) => Promise.reject(friendlyError(e)));
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const reasons = [];
+  let botBlocks = 0;
   for (const clientName of clients) {
     try {
-      const info = await yt.getBasicInfo(id, { client: clientName });
+      const po = await poTokensFor(yt, clientName, id);
+      // Token für die Video-Server: hängt der Player an jede Stream-Adresse an (&pot=)
+      yt.session.player.po_token = po?.session;
+      const info = await yt.getBasicInfo(id, { client: clientName, po_token: po?.content });
       const status = info.playability_status;
       if (status?.status !== 'OK') {
-        reasons.push(`${clientName}: ${status?.reason || status?.status || 'nicht abspielbar'}`);
+        const reason = status?.reason || status?.status || 'nicht abspielbar';
+        reasons.push(`${clientName}: ${reason}`);
         // Privat / gelöscht: andere Clients ändern daran nichts
         if (status?.status === 'ERROR') break;
+        // Bot-Sperre gilt fürs ganze Netz – nicht alle Clients durchprobieren (das macht es nur schlimmer)
+        if (BOT_REASON.test(reason) && ++botBlocks >= 2) break;
         continue;
       }
       const sd = info.streaming_data;
@@ -348,16 +375,22 @@ export async function stream(id, { maxHeight = 1080, exclude = [], clients = pre
         // Nur Videospuren bis zur geprüften Auflösung – darüber sperrt YouTube manchmal
         format_filter: (f) => f.has_video && (f.height || 0) > cap,
       });
-      return { ...meta, kind: 'dash', manifest, maxHeight: cap };
+      return { ...meta, kind: 'dash', manifest, maxHeight: cap, poToken: Boolean(po) };
     } catch (e) {
       reasons.push(`${clientName}: ${e?.message?.split('\n')[0] || e}`);
+    } finally {
+      yt.session.player.po_token = undefined;
     }
   }
-  const bot = reasons.some((r) => /bot|sign in|anmelden|status code (403|429)/i.test(r));
+  // "Bot" nur melden, wenn wirklich alle Versuche daran scheiterten
+  const bot = reasons.length > 0 && reasons.every((r) => BOT_REASON.test(r));
+  const blocked = reasons.length > 0 && reasons.every((r) => /gesperrt|status code 403/i.test(r));
   throw new StreamError(
     bot
-      ? 'YouTube blockiert gerade Anfragen aus deinem Netz („Bestätige, dass du kein Bot bist“). Später erneut versuchen.'
-      : 'Video konnte nicht geladen werden: ' + (reasons[0]?.replace(/^[A-Z_]+: /, '') || 'unbekannter Fehler'),
+      ? 'YouTube verlangt gerade eine Bot-Bestätigung für Anfragen aus deinem Netz. Meist hilft es, ein paar Minuten zu warten.'
+      : blocked
+        ? 'YouTube hat die Streams für dieses Video abgelehnt.'
+        : 'Video konnte nicht geladen werden: ' + (reasons.find((r) => !BOT_REASON.test(r))?.replace(/^[A-Z_]+: /, '') || reasons[0]?.replace(/^[A-Z_]+: /, '') || 'unbekannter Fehler'),
     reasons,
   );
 }

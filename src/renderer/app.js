@@ -69,9 +69,10 @@ async function boot() {
 function bindEvents() {
   gx.onLoading(onLoading);
   gx.onSource(onSource);
-  gx.onError(({ token, message }) => {
+  gx.onError(({ token, message, details }) => {
     if (token !== state.token) return;
     state.error = message;
+    state.errorDetails = Array.isArray(details) ? details : [];
     renderStatus('error');
   });
   gx.onVideo(({ token, video: v }) => {
@@ -131,6 +132,7 @@ function onLoading({ token, video: v }) {
   state.video = v;
   state.details = null;
   state.error = null;
+  state.errorDetails = [];
   state.segments = [];
   player.prepare(token);
   if (state.watch === 'hidden') setWatch('full');
@@ -655,6 +657,9 @@ function renderStatus(status) {
   document.querySelector('.stage').classList.toggle('buffering', status === 'buffering');
   $('errorBox').hidden = status !== 'error';
   $('errorText').textContent = state.error ?? 'Wiedergabefehler';
+  const reasons = status === 'error' ? state.errorDetails ?? [] : [];
+  $('errorDetails').hidden = reasons.length === 0;
+  $('errorReasons').replaceChildren(...reasons.map((r) => el('li', null, r)));
   if (status === 'paused' || status === 'ended' || status === 'error') $('controls').classList.add('show');
   else showControls();
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = playing ? 'playing' : status === 'paused' ? 'paused' : 'none';

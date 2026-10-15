@@ -72,7 +72,8 @@ wählen und die Adresse eingeben, die GX Tube Desktop auf der Startseite anzeigt
 - Die **offizielle** YouTube-App kann GX Tube Desktop nicht steuern – nur die GX Tube Android-App.
 - YouTube ändert regelmäßig seine Schnittstellen. Lädt nichts mehr, hilft meist eine neuere Version von
   YouTube.js (`package.json` → `youtubei.js`) – GitHub baut dann automatisch eine neue Version.
-- Wenn YouTube zu viele Anfragen aus deinem Netz sieht, kommt „YouTube blockiert gerade Anfragen“. Dann hilft warten.
+- Wenn YouTube zu viele Anfragen aus deinem Netz sieht, verlangt es eine Bot-Bestätigung. Dann hilft warten.
+  Unter der Fehlermeldung zeigt „Details“, was jeder YouTube-Client geantwortet hat.
 
 ## 🛠️ Selbst bauen
 
@@ -97,7 +98,8 @@ BLOCK_CLIENT=IOS npm run debug:play -- dQw4w9WgXcQ 60   # simuliert eine YouTube
 | | |
 |---|---|
 | Programm | Electron, Oberfläche in reinem HTML/CSS/JS (ohne Framework) |
-| YouTube-Daten | YouTube.js (InnerTube): Suche, Vorschläge, Details, ähnliche Videos. Streams über mehrere YouTube-Clients (iOS, Mobile Web, TV …): Vor dem Abspielen wird die gewählte Qualität mitten in der Datei geprüft; lehnt YouTube während der Wiedergabe ab, geht es an derselben Stelle mit dem nächsten Client weiter |
+| YouTube-Daten | YouTube.js (InnerTube): Suche, Vorschläge, Details, ähnliche Videos. Streams über mehrere YouTube-Clients (Mobile Web, iOS, TV …): Vor dem Abspielen wird die gewählte Qualität mitten in der Datei geprüft; lehnt YouTube während der Wiedergabe ab, geht es an derselben Stelle mit dem nächsten Client weiter |
+| PO-Token | Wie im Browser: YouTubes BotGuard läuft in einem unsichtbaren Fenster ([BgUtils](https://github.com/LuanRT/BgUtils)), damit bekommt Mobile Web gültige „Proof of Origin“-Tokens |
 | Player | Shaka Player: Video- und Tonspur getrennt als DASH, Live-Streams als HLS |
 | Fernsteuerung | WebSocket (Port 8765) + UDP-Suche (Port 8766), siehe **[PROTOCOL.md](PROTOCOL.md)** |
 | Werbung im Video | SponsorBlock-API (Abfrage über Hash-Präfix, die Video-ID bleibt privat) |

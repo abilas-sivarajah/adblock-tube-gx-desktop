@@ -7,8 +7,12 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const VIDEO = process.argv[2] || 'VpkqL98Ualo';
 const SECONDS = Number(process.argv[3] || 60);
 const ud = fs.mkdtempSync(path.join(os.tmpdir(), 'gx-debug-'));
-const app = await electron.launch({ args: [root, '--no-sandbox'], cwd: root, env: { ...process.env, GXTUBE_USER_DATA: ud, GXTUBE_PORT: '19765', GXTUBE_DISCOVERY_PORT: '19766', GXTUBE_NO_UPDATES: '1' } });
-app.process().stderr.on('data', (d) => { const t = String(d); if (/Stream-Fehler|\[stream\]/.test(t)) process.stdout.write('[main] ' + t.slice(0, 600)); });
+// EXECUTABLE=dist/linux-unpacked/gxtube-desktop: fertig gebautes Programm prüfen
+const executablePath = process.env.EXECUTABLE ? path.resolve(root, process.env.EXECUTABLE) : undefined;
+const app = await electron.launch({ executablePath, args: executablePath ? ['--no-sandbox'] : [root, '--no-sandbox'], cwd: root, env: { ...process.env, GXTUBE_USER_DATA: ud, GXTUBE_PORT: '19765', GXTUBE_DISCOVERY_PORT: '19766', GXTUBE_NO_UPDATES: '1' } });
+const fromMain = (d) => { const t = String(d); if (/Stream-Fehler|\[stream\]|\[potoken\]/.test(t)) process.stdout.write('[main] ' + t.slice(0, 900)); };
+app.process().stderr.on('data', fromMain);
+app.process().stdout.on('data', fromMain);
 const win = await app.firstWindow();
 win.on('console', (m) => { if (m.type() !== 'log') console.log('[fenster]', m.type(), m.text().slice(0, 500)); });
 win.on('response', (r) => { if (r.url().includes('googlevideo') && r.status() >= 400) console.log('[http]', r.status(), r.url().replace(/\?.*?(itag=\d+).*?(range=[\d-]+)?.*/, '?$1 $2').slice(0, 160)); });
