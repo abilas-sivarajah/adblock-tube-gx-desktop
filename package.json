@@ -20,6 +20,7 @@
     "test": "node --test \"test/*.test.js\"",
     "test:online": "GXTUBE_ONLINE_TESTS=1 node --test \"test/*.test.js\"",
     "smoke": "node test-e2e/smoke.mjs",
+    "test:account": "node test-e2e/account-test.mjs",
     "dist": "electron-builder --publish never",
     "dist:win": "electron-builder --win --publish never",
     "dist:linux": "electron-builder --linux --publish never",

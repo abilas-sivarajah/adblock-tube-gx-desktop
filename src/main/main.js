@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import * as YT from './youtube.js';
 import * as SponsorBlock from './sponsorblock.js';
 import * as PoToken from './potoken.js';
+import * as Account from './account.js';
 import { CastServer } from './cast-server.js';
 import { Session } from './session.js';
 import { Store, lanAddresses } from './store.js';
@@ -54,6 +55,7 @@ async function start() {
   store = new Store(app.getPath('userData'));
   playback.volume = store.settings.volume;
   playback.speed = store.settings.speed;
+  Account.init(app.getPath('userData'));
 
   YT.configure({
     lang: 'de',
@@ -61,6 +63,15 @@ async function start() {
     fetch: (input, init) => net.fetch(input instanceof URL ? input.toString() : input, init),
     cacheDir: path.join(app.getPath('userData'), 'yt-cache'),
     poTokens: { available: PoToken.available, mint: PoToken.mint },
+    account: {
+      loggedIn: Account.loggedIn,
+      cookieHeader: Account.cookieHeader,
+      fetch: Account.accountFetch,
+      onExpired: () => {
+        Account.markExpired();
+        send('account', Account.status());
+      },
+    },
   });
   YT.client().catch(() => {}); // Player-Skript schon mal laden
 
@@ -317,6 +328,7 @@ async function loadVideo({ video, startMs, exclude = [], fallback = false }) {
     current.stream = stream;
     current.resolvedAt = Date.now();
     console.info(`[stream] ${video.id} über ${stream.client}${stream.poToken ? ' mit PO-Token' : ''}, bis ${stream.maxHeight}p${stream.note ? ` – ${stream.note}` : ''}`);
+    if (stream.account && !Account.status().name) loadAccountProfile();
     updateCurrentVideo({ ...video, title: stream.title || video.title, channelName: stream.channelName || video.channelName, durationSec: stream.durationSec > 0 ? stream.durationSec : video.durationSec, isLive: stream.isLive });
     send('player:source', { token, video: current.video, stream, startMs: stream.isLive ? null : resume, maxQuality: store.settings.maxQuality });
   } catch (err) {
@@ -324,9 +336,46 @@ async function loadVideo({ video, startMs, exclude = [], fallback = false }) {
     console.warn('Stream-Fehler', err?.reasons ?? err);
     current.error = err?.message ?? 'Video konnte nicht geladen werden';
     playback = { ...playback, status: 'error' };
-    send('player:error', { token, message: current.error, details: Array.isArray(err?.reasons) ? err.reasons : [] });
+    send('player:error', { token, message: current.error, details: Array.isArray(err?.reasons) ? err.reasons : [], signIn: Boolean(err?.signIn) });
     broadcastState();
   }
+}
+
+// ------------------------------------------------------------------ Google-Konto
+
+async function login() {
+  const result = await Account.login(win);
+  if (result === 'rejected') toast('Google hat die Anmeldung in diesem Fenster abgelehnt („Browser nicht sicher“). Bitte später nochmal versuchen.');
+  if (result !== 'ok') return Account.status();
+  YT.resetAccount();
+  send('account', Account.status());
+  toast('Mit Google angemeldet');
+  loadAccountProfile();
+  // Ist gerade ein Video gescheitert? Gleich nochmal – diesmal mit Konto
+  if (current?.error) loadVideo({ video: current.video, startMs: playback.positionMs || current.startMs });
+  return Account.status();
+}
+
+let profileLoading = false;
+function loadAccountProfile() {
+  if (profileLoading || !Account.loggedIn()) return;
+  profileLoading = true;
+  YT.accountProfile()
+    .then((p) => {
+      if (p) Account.setProfile(p.name, p.photo);
+      send('account', Account.status());
+    })
+    .catch((e) => console.warn('[konto] Profil', e?.message ?? e))
+    .finally(() => {
+      profileLoading = false;
+    });
+}
+
+async function logout() {
+  await Account.logout();
+  YT.resetAccount();
+  send('account', Account.status());
+  return Account.status();
 }
 
 /** Titel/Dauer nachtragen, wenn das Handy nur die ID geschickt hat. */
@@ -570,7 +619,7 @@ function setupIpc() {
     const expired = current.resolvedAt && Date.now() - current.resolvedAt > 45 * 60 * 1000;
     const exclude = used && !expired ? [...current.exclude, used] : current.exclude;
     if (http && used && !expired) YT.reportClientFailure(used);
-    const left = YT.STREAM_CLIENTS.filter((c) => !exclude.includes(c)).length;
+    const left = YT.clientsLeft(exclude);
     // Höchstens zweimal wechseln – viele Anfragen hintereinander lösen bei YouTube die Bot-Sperre aus
     if (left > 0 && current.attempts < 2) {
       console.warn(`[stream] ${used ?? '?'} abgelehnt bei ${Math.round((Number(positionMs) || 0) / 1000)} s – nächster Client`);
@@ -586,6 +635,9 @@ function setupIpc() {
   ipcMain.on('window:fullscreen', (_e, on) => win?.setFullScreen(Boolean(on)));
   ipcMain.handle('window:isFullscreen', () => Boolean(win?.isFullScreen()));
   ipcMain.on('clients:kick', (_e, id) => server?.kick(Number(id)));
+  ipcMain.handle('account:status', () => Account.status());
+  ipcMain.handle('account:login', () => login());
+  ipcMain.handle('account:logout', () => logout());
   ipcMain.handle('update:status', () => updateStatus());
   ipcMain.handle('update:check', () => checkForUpdates(true));
   ipcMain.handle('update:install', () => installUpdate());

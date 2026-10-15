@@ -38,6 +38,11 @@ jobs:
       - name: Mit echtem YouTube-Video (nur Info)
         continue-on-error: true
         run: xvfb-run -a -s "-screen 0 1280x800x24" npm run smoke
+      - name: Google-Anmeldung durchspielen (ohne echtes Konto, nur Info)
+        continue-on-error: true
+        env:
+          SHOTS_DIR: test-e2e/out
+        run: mkdir -p test-e2e/out && xvfb-run -a -s "-screen 0 1280x800x24" npm run test:account
       - uses: actions/upload-artifact@v4
         if: always()
         with:

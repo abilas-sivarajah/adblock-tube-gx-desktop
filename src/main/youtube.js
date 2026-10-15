@@ -20,6 +20,10 @@ Platform.shim.eval = async (data, env) => {
  */
 export const STREAM_CLIENTS = ['MWEB', 'IOS', 'TV_SIMPLY', 'ANDROID_VR', 'TV'];
 
+// Mit Google-Konto: Diese Clients akzeptieren Konto-Cookies (TV braucht kein PO-Token)
+export const ACCOUNT_CLIENTS = ['TV', 'MWEB'];
+const ACCOUNT_PREFIX = 'Konto ';
+
 // Diese Clients bekommen ein PO-Token (wie YouTube im Browser), wenn eins erzeugt werden kann
 const PO_CLIENTS = new Set(['MWEB', 'WEB']);
 const BOT_REASON = /bot|sign in|anmelden|confirm you/i;
@@ -27,14 +31,21 @@ const BOT_REASON = /bot|sign in|anmelden|confirm you/i;
 export const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
 
 // poTokens: { available(): boolean, mint(binding): Promise<string> } – siehe potoken.js
-let options = { lang: 'de', location: 'DE', fetch: undefined, cacheDir: undefined, poTokens: null };
+// account: { loggedIn(): boolean, cookieHeader(): Promise<string|null>, fetch, onExpired() } – siehe account.js
+let options = { lang: 'de', location: 'DE', fetch: undefined, cacheDir: undefined, poTokens: null, account: null };
 let clientPromise = null;
+let accountPromise = null;
 const searches = new Map();
 let searchCounter = 0;
 
 export function configure(opts) {
   options = { ...options, ...opts };
   clientPromise = null;
+  accountPromise = null;
+}
+
+function cache() {
+  return options.cacheDir ? new UniversalCache(true, options.cacheDir) : undefined;
 }
 
 export function client() {
@@ -45,13 +56,86 @@ export function client() {
       retrieve_player: true,
       generate_session_locally: true,
       fetch: options.fetch,
-      cache: options.cacheDir ? new UniversalCache(true, options.cacheDir) : undefined,
+      cache: cache(),
     }).catch((e) => {
       clientPromise = null;
       throw e;
     });
   }
   return clientPromise;
+}
+
+// ------------------------------------------------------------------ Google-Konto
+
+class AccountError extends Error {}
+
+/** Werte aus der ytcfg einer YouTube-Seite (angemeldet?, Besucher-ID, DataSync-ID). */
+export function parseYtcfg(html) {
+  const str = (key) => {
+    const m = String(html).match(new RegExp(`"${key}":"((?:[^"\\\\]|\\\\.)*)"`));
+    return m ? JSON.parse(`"${m[1]}"`) : null;
+  };
+  const loggedIn = String(html).match(/"LOGGED_IN":(true|false)/);
+  return {
+    loggedIn: loggedIn ? loggedIn[1] === 'true' : null,
+    visitorData: str('VISITOR_DATA'),
+    dataSyncId: str('DATASYNC_ID'),
+  };
+}
+
+async function createAccountClient() {
+  const acc = options.account;
+  const cookie = acc?.loggedIn() ? await acc.cookieHeader() : null;
+  if (!cookie) throw new AccountError('nicht angemeldet');
+  // Startseite mit Konto: Ist die Anmeldung noch gültig? Dazu Besucher- und DataSync-ID wie im Browser
+  let cfg = { loggedIn: null, visitorData: null, dataSyncId: null };
+  try {
+    const res = await acc.fetch(`https://www.youtube.com/?hl=${options.lang}&gl=${options.location}`, { headers: { Accept: 'text/html' } });
+    if (res.ok) cfg = parseYtcfg(await res.text());
+  } catch (e) {
+    console.warn('[konto]', e?.message ?? e);
+  }
+  if (cfg.loggedIn === false) {
+    acc.onExpired?.();
+    throw new AccountError('Google-Anmeldung abgelaufen – bitte in den Einstellungen neu anmelden');
+  }
+  const yt = await Innertube.create({
+    lang: options.lang,
+    location: options.location,
+    retrieve_player: true,
+    generate_session_locally: true,
+    enable_session_cache: false,
+    visitor_data: cfg.visitorData ?? undefined,
+    cookie,
+    fetch: acc.fetch,
+    cache: cache(),
+  });
+  return { yt, dataSyncId: cfg.dataSyncId };
+}
+
+function accountClient() {
+  if (!accountPromise) {
+    accountPromise = createAccountClient().catch((e) => {
+      accountPromise = null;
+      throw e;
+    });
+  }
+  return accountPromise;
+}
+
+/** Nach An- oder Abmelden: Konto-Client neu aufbauen. */
+export function resetAccount() {
+  accountPromise = null;
+  accountFirstUntil = 0;
+}
+
+/** Name und Bild des angemeldeten Kontos (nur zur Anzeige). */
+export async function accountProfile() {
+  const { yt } = await accountClient();
+  const items = await yt.account.getInfo(true);
+  const me = items.find((i) => i.is_selected) ?? items[0];
+  if (!me) return null;
+  return { name: text(me.account_name) || null, photo: bestThumb(me.account_photo) };
 }
 
 // ------------------------------------------------------------------ Umwandeln
@@ -233,7 +317,9 @@ export async function suggestions(query) {
 /** Titel, Kanal, Beschreibung und ähnliche Videos (für Autoplay und die Seitenleiste). */
 export async function details(id) {
   if (!VIDEO_ID.test(id)) throw new Error('Ungültige Video-ID');
-  const yt = await client().catch((e) => Promise.reject(friendlyError(e)));
+  // Während anonym gesperrt ist, auch die Details mit Konto holen
+  let yt = options.account?.loggedIn() && Date.now() < accountFirstUntil ? await accountClient().then((a) => a.yt, () => null) : null;
+  yt ??= await client().catch((e) => Promise.reject(friendlyError(e)));
   const info = await guarded(() => yt.getInfo(id));
   const b = info.basic_info;
   const related = unique((info.watch_next_feed ?? []).map(toVideo));
@@ -252,9 +338,11 @@ export async function details(id) {
 }
 
 class StreamError extends Error {
-  constructor(message, reasons) {
+  constructor(message, reasons, { signIn = false } = {}) {
     super(message);
     this.reasons = reasons;
+    // Würde eine Anmeldung mit Google helfen?
+    this.signIn = signIn;
   }
 }
 
@@ -270,14 +358,16 @@ async function urlWorks(url, fetchImpl, offset = 0) {
   }
 }
 
-/** PO-Tokens für Web-Clients: [session] gebunden an die Visitor-ID, [content] an die Video-ID. */
-async function poTokensFor(yt, clientName, id) {
+/**
+ * PO-Tokens für Web-Clients: [session] gebunden an die Visitor-ID (mit Konto: DataSync-ID),
+ * [content] an die Video-ID.
+ */
+async function poTokensFor(yt, clientName, id, binding) {
   const provider = options.poTokens;
-  if (!PO_CLIENTS.has(clientName) || !provider?.available()) return null;
-  const visitor = yt.session.context.client.visitorData;
+  if (!PO_CLIENTS.has(clientName) || !binding || !provider?.available()) return null;
   try {
     const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('PO-Token dauert zu lange')), 8000));
-    const [session, content] = await Promise.race([Promise.all([provider.mint(visitor), provider.mint(id)]), timeout]);
+    const [session, content] = await Promise.race([Promise.all([provider.mint(binding), provider.mint(id)]), timeout]);
     return { session, content };
   } catch (e) {
     console.warn('[potoken]', e?.message ?? e);
@@ -288,6 +378,10 @@ async function poTokensFor(yt, clientName, id) {
 // Clients, deren Streams kürzlich mitten im Video abgelehnt wurden, kommen eine Weile ans Ende.
 const clientFailures = new Map(); // Client → Zeitpunkt
 const FAILURE_PENALTY_MS = 60 * 60 * 1000;
+// Nach einer Bot-Sperre eine Weile gleich mit Konto laden, statt erst wieder anonym zu fragen
+const ACCOUNT_FIRST_MS = 30 * 60 * 1000;
+let accountFirstUntil = 0;
+const AGE_REASON = /\bage\b|\balter\b|altersbeschr|inappropriate|ungeeignet/i;
 
 export function reportClientFailure(clientName) {
   if (clientName) clientFailures.set(clientName, Date.now());
@@ -300,35 +394,35 @@ export function preferredClients(exclude = []) {
   return [...usable.filter((c) => !recentlyFailed(c)), ...usable.filter(recentlyFailed)];
 }
 
+/** Wie viele Clients bleiben für dieses Video noch übrig (angemeldet auch die mit Konto)? */
+export function clientsLeft(exclude = []) {
+  const anonymous = STREAM_CLIENTS.filter((c) => !exclude.includes(c)).length;
+  const account = options.account?.loggedIn() ? ACCOUNT_CLIENTS.filter((c) => !exclude.includes(ACCOUNT_PREFIX + c)).length : 0;
+  return anonymous + account;
+}
+
 /**
- * Sucht einen YouTube-Client, dessen Stream-Adressen wirklich abspielbar sind,
- * und baut daraus ein DASH-Manifest (getrennte Video- und Tonspur) bzw. nimmt
- * bei Live-Streams die HLS-Adresse.
- *
- * Geprüft wird die beste Videospur bis [maxHeight] mitten in der Datei: Manche Clients
- * liefern ohne "PO-Token" nur den Anfang oder nur niedrige Qualitäten.
- * [exclude]: Clients, die bei diesem Video schon versagt haben.
+ * Probiert die Clients einer Gruppe (anonym oder mit Konto) der Reihe nach.
+ * Gibt den ersten abspielbaren Stream zurück, sonst null (Gründe in [ctx.reasons]).
  */
-export async function stream(id, { maxHeight = 1080, exclude = [], clients = preferredClients(exclude), check = true } = {}) {
-  if (!VIDEO_ID.test(id)) throw new Error('Ungültige Video-ID');
-  const yt = await client().catch((e) => Promise.reject(friendlyError(e)));
-  const fetchImpl = options.fetch ?? globalThis.fetch;
-  const reasons = [];
+async function tryClients(id, group, ctx) {
+  const { yt } = group;
   let botBlocks = 0;
-  for (const clientName of clients) {
+  for (const clientName of group.clients) {
+    const label = group.prefix + clientName;
     try {
-      const po = await poTokensFor(yt, clientName, id);
+      const po = await poTokensFor(yt, clientName, id, group.binding);
       // Token für die Video-Server: hängt der Player an jede Stream-Adresse an (&pot=)
       yt.session.player.po_token = po?.session;
       const info = await yt.getBasicInfo(id, { client: clientName, po_token: po?.content });
       const status = info.playability_status;
       if (status?.status !== 'OK') {
         const reason = status?.reason || status?.status || 'nicht abspielbar';
-        reasons.push(`${clientName}: ${reason}`);
+        ctx.reasons.push(`${label}: ${reason}`);
         // Privat / gelöscht: andere Clients ändern daran nichts
-        if (status?.status === 'ERROR') break;
+        if (status?.status === 'ERROR') return null;
         // Bot-Sperre gilt fürs ganze Netz – nicht alle Clients durchprobieren (das macht es nur schlimmer)
-        if (BOT_REASON.test(reason) && ++botBlocks >= 2) break;
+        if (BOT_REASON.test(reason) && ++botBlocks >= 2) return null;
         continue;
       }
       const sd = info.streaming_data;
@@ -340,11 +434,12 @@ export async function stream(id, { maxHeight = 1080, exclude = [], clients = pre
         thumbnail: bestThumb(b.thumbnail, id),
         durationSec: b.duration ?? -1,
         isLive: Boolean(b.is_live),
-        client: clientName,
+        client: label,
+        account: Boolean(group.account),
       };
       if (b.is_live || b.is_post_live_dvr) {
         if (sd?.hls_manifest_url) return { ...meta, kind: 'hls', url: sd.hls_manifest_url };
-        reasons.push(`${clientName}: kein Live-Stream`);
+        ctx.reasons.push(`${label}: kein Live-Stream`);
         continue;
       }
       const formats = sd?.adaptive_formats ?? [];
@@ -353,11 +448,11 @@ export async function stream(id, { maxHeight = 1080, exclude = [], clients = pre
       // Video mit Ton in einer Datei (meist 360p) – liefert YouTube fast immer
       const muxed = (sd?.formats ?? []).filter((f) => f.has_video && f.has_audio).sort((a, c) => (c.height || 0) - (a.height || 0))[0];
       const middle = (f) => (Number(f.content_length) || 0) * 0.5;
-      const works = async (f) => !check || urlWorks(await f.decipher(yt.session.player), fetchImpl, middle(f));
+      const works = async (f) => !ctx.check || urlWorks(await f.decipher(yt.session.player), ctx.fetchImpl, middle(f));
 
       // Beste Auflösung bis maxHeight, die YouTube wirklich ausliefert – manche Clients sperren
       // höhere Qualitäten (ohne passendes Token), niedrigere gehen dann meist noch.
-      const heights = [...new Set(videos.map((f) => f.height || 0))].filter((h) => h > 0 && h <= maxHeight).sort((a, b) => b - a);
+      const heights = [...new Set(videos.map((f) => f.height || 0))].filter((h) => h > 0 && h <= ctx.maxHeight).sort((a, c) => c - a);
       if (!heights.length && videos.length) heights.push(Math.min(...videos.map((f) => f.height || 0)));
       const audioOk = audio ? await works(audio) : false;
       const tried = [];
@@ -384,23 +479,94 @@ export async function stream(id, { maxHeight = 1080, exclude = [], clients = pre
         return { ...meta, kind: 'progressive', url: await muxed.decipher(yt.session.player), maxHeight: muxed.height, poToken: Boolean(po), note: 'nur Datei mit Ton (niedrige Qualität)' };
       }
       const what = !audio ? 'keine Tonspur' : !audioOk ? 'Ton' : `Video ${tried.join(', ') || 'keine Spur'}`;
-      reasons.push(`${clientName}: Stream gesperrt (${what}${muxed ? ', auch die 360p-Datei' : ''})`);
-      continue;
+      ctx.reasons.push(`${label}: Stream gesperrt (${what}${muxed ? ', auch die 360p-Datei' : ''})`);
     } catch (e) {
-      reasons.push(`${clientName}: ${e?.message?.split('\n')[0] || e}`);
+      ctx.reasons.push(`${label}: ${e?.message?.split('\n')[0] || e}`);
     } finally {
       yt.session.player.po_token = undefined;
     }
   }
+  return null;
+}
+
+/**
+ * Sucht einen YouTube-Client, dessen Stream-Adressen wirklich abspielbar sind,
+ * und baut daraus ein DASH-Manifest (getrennte Video- und Tonspur) bzw. nimmt
+ * bei Live-Streams die HLS-Adresse.
+ *
+ * Geprüft wird die beste Videospur bis [maxHeight] mitten in der Datei: Manche Clients
+ * liefern ohne "PO-Token" nur den Anfang oder nur niedrige Qualitäten.
+ * [exclude]: Clients, die bei diesem Video schon versagt haben.
+ *
+ * Mit Google-Konto: Scheitert es anonym (Bot-Sperre, Altersgrenze …), geht es mit Konto
+ * weiter – und nach einer Sperre für eine Weile gleich mit Konto.
+ */
+export async function stream(id, { maxHeight = 1080, exclude = [], clients = preferredClients(exclude), check = true } = {}) {
+  if (!VIDEO_ID.test(id)) throw new Error('Ungültige Video-ID');
+  const ctx = { reasons: [], maxHeight, check, fetchImpl: options.fetch ?? globalThis.fetch };
+  const withAccount = Boolean(options.account?.loggedIn());
+
+  const anonymous = async () => {
+    const yt = await client();
+    return { yt, prefix: '', clients, binding: yt.session.context.client.visitorData };
+  };
+  const account = async () => {
+    const { yt, dataSyncId } = await accountClient();
+    const names = ACCOUNT_CLIENTS.filter((c) => !exclude.includes(ACCOUNT_PREFIX + c));
+    return { yt, prefix: ACCOUNT_PREFIX, clients: names, binding: dataSyncId, account: true };
+  };
+  const accountFirst = withAccount && Date.now() < accountFirstUntil;
+  const order = !withAccount ? [anonymous] : accountFirst ? [account, anonymous] : [anonymous, account];
+
+  let setupError = null;
+  let accountExpired = false;
+  for (const group of order) {
+    let g;
+    try {
+      g = await group();
+    } catch (e) {
+      if (group === account) {
+        accountExpired = /abgelaufen/.test(e?.message ?? '');
+        ctx.reasons.push(`Konto: ${e?.message ?? e}`);
+      } else {
+        setupError ??= friendlyError(e);
+      }
+      continue;
+    }
+    const result = await tryClients(id, g, ctx);
+    if (result) {
+      // Anonym ging es nicht, mit Konto schon: die nächste halbe Stunde gleich mit Konto
+      if (g.account && !accountFirst) accountFirstUntil = Date.now() + ACCOUNT_FIRST_MS;
+      return result;
+    }
+  }
+  if (setupError && !ctx.reasons.length) throw setupError;
+
+  const reasons = ctx.reasons;
+  const tried = reasons.filter((r) => !r.startsWith('Konto: '));
   // "Bot" nur melden, wenn wirklich alle Versuche daran scheiterten
-  const bot = reasons.length > 0 && reasons.every((r) => BOT_REASON.test(r));
-  const blocked = reasons.length > 0 && reasons.every((r) => /gesperrt|status code 403/i.test(r));
-  throw new StreamError(
-    bot
-      ? 'YouTube verlangt gerade eine Bot-Bestätigung für Anfragen aus deinem Netz. Meist hilft es, ein paar Minuten zu warten.'
-      : blocked
-        ? 'YouTube hat die Streams für dieses Video abgelehnt.'
-        : 'Video konnte nicht geladen werden: ' + (reasons.find((r) => !BOT_REASON.test(r))?.replace(/^[A-Z_]+: /, '') || reasons[0]?.replace(/^[A-Z_]+: /, '') || 'unbekannter Fehler'),
-    reasons,
-  );
+  const bot = tried.length > 0 && tried.every((r) => BOT_REASON.test(r));
+  const age = tried.some((r) => AGE_REASON.test(r));
+  const blocked = tried.length > 0 && tried.every((r) => /gesperrt|status code 403/i.test(r));
+  const strip = (r) => r?.replace(/^(Konto )?[A-Z_]+: /, '');
+  let message;
+  let signIn = false;
+  if (accountExpired) {
+    message = 'Deine Google-Anmeldung ist abgelaufen. Bitte melde dich neu an.';
+    signIn = true;
+  } else if (age) {
+    message = withAccount ? 'Dieses Video ist altersbeschränkt und lässt sich mit deinem Konto nicht abspielen.' : 'Dieses Video ist altersbeschränkt. Melde dich mit Google an, um es anzusehen.';
+    signIn = !withAccount;
+  } else if (bot) {
+    message = withAccount
+      ? 'YouTube verlangt gerade eine Bot-Bestätigung – auch mit deinem Google-Konto. Bitte ein paar Minuten warten.'
+      : 'YouTube verlangt gerade eine Bot-Bestätigung für Anfragen aus deinem Netz. Mit Google anmelden hilft meistens – oder ein paar Minuten warten.';
+    signIn = !withAccount;
+  } else if (blocked) {
+    message = 'YouTube hat die Streams für dieses Video abgelehnt.';
+    signIn = !withAccount;
+  } else {
+    message = 'Video konnte nicht geladen werden: ' + (strip(tried.find((r) => !BOT_REASON.test(r))) || strip(reasons[0]) || 'unbekannter Fehler');
+  }
+  throw new StreamError(message, reasons, { signIn });
 }

@@ -193,6 +193,9 @@ video { position: absolute; inset: 0; width: 100%; height: 100%; background: #00
 .error-box p { max-width: 640px; }
 .error-reasons { max-width: 760px; margin: 4px 0 0; padding: 10px 14px 10px 30px; border-radius: 8px; background: rgba(255,255,255,.06); color: var(--text-2); font-size: 13px; text-align: left; user-select: text; }
 .error-reasons li { margin: 2px 0; }
+.error-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.error-actions .pill:not(:last-child) { background: #3ea6ff; color: #0f0f0f; }
+.account-photo { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; background: var(--chip); flex: none; }
 
 .center-flash { position: absolute; left: 50%; top: 50%; width: 72px; height: 72px; margin: -36px 0 0 -36px; border-radius: 50%; background: rgba(0,0,0,.55); display: grid; place-items: center; opacity: 0; pointer-events: none; }
 .center-flash.show { animation: flash .6s ease-out; }

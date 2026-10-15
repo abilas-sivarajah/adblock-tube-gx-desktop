@@ -51,3 +51,23 @@ test('Clients, die mitten im Video abgelehnt wurden, kommen ans Ende', async () 
   assert.equal(order.length, yt.STREAM_CLIENTS.length);
   assert.ok(!yt.preferredClients([yt.STREAM_CLIENTS[1]]).includes(yt.STREAM_CLIENTS[1]));
 });
+
+test('ytcfg der YouTube-Startseite: angemeldet, Besucher- und DataSync-ID', async () => {
+  const { parseYtcfg } = await import('../src/main/youtube.js');
+  const html = '<script>ytcfg.set({"LOGGED_IN":true,"VISITOR_DATA":"CgtBQkNkZWYxMjM0NSi\\u003d","DATASYNC_ID":"10987654321||","X":"a\\"b"});</script>';
+  assert.deepEqual(parseYtcfg(html), { loggedIn: true, visitorData: 'CgtBQkNkZWYxMjM0NSi=', dataSyncId: '10987654321||' });
+  assert.deepEqual(parseYtcfg('{"LOGGED_IN":false}'), { loggedIn: false, visitorData: null, dataSyncId: null });
+  assert.deepEqual(parseYtcfg('<html>Einwilligung</html>'), { loggedIn: null, visitorData: null, dataSyncId: null });
+});
+
+test('Mit Google-Konto gibt es weitere Clients zum Ausweichen', async () => {
+  const yt = await import('../src/main/youtube.js');
+  let loggedIn = false;
+  yt.configure({ account: { loggedIn: () => loggedIn, cookieHeader: async () => null, fetch: globalThis.fetch } });
+  const all = yt.STREAM_CLIENTS;
+  assert.equal(yt.clientsLeft(all), 0);
+  loggedIn = true;
+  assert.equal(yt.clientsLeft(all), yt.ACCOUNT_CLIENTS.length);
+  assert.equal(yt.clientsLeft([...all, ...yt.ACCOUNT_CLIENTS.map((c) => 'Konto ' + c)]), 0);
+  yt.configure({ account: null });
+});

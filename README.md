@@ -37,6 +37,17 @@ Jeder Push auf `main` baut automatisch eine neue Version (GitHub Actions).
 Findet die App den PC nicht (manche Router blockieren die Suche), in der App **„Per Adresse verbinden“**
 wählen und die Adresse eingeben, die GX Tube Desktop auf der Startseite anzeigt (z. B. `192.168.178.23`).
 
+## 🔑 Mit Google anmelden (optional)
+
+Manchmal sperrt YouTube Anfragen ohne Anmeldung aus deinem Netz („Bestätige, dass du kein Bot bist“)
+oder ein Video ist altersbeschränkt. Dafür gibt es in den **Einstellungen → Google-Konto** (und direkt in
+der Fehlermeldung) den Knopf **„Mit Google anmelden“**:
+
+- Es öffnet sich Googles normale Anmeldeseite. Dein Passwort geht nur an Google, nie an GX Tube.
+- Die Anmeldung bleibt in einem eigenen Profil **nur auf diesem PC**; „Abmelden“ löscht sie wieder.
+- GX Tube lädt Videos weiter **ohne** Konto. Erst wenn YouTube ablehnt, geht es mit Konto weiter –
+  und danach für eine halbe Stunde gleich mit Konto. Videos bleiben werbefrei.
+
 ## 🌟 Funktionen
 
 | | |
@@ -49,6 +60,7 @@ wählen und die Adresse eingeben, die GX Tube Desktop auf der Startseite anzeigt
 | **Player** | Bis 4K, Qualität und Geschwindigkeit wählbar, Live-Streams, Autoplay, Vollbild, Medientasten der Tastatur |
 | **Im Hintergrund** | Fenster schließen legt GX Tube in den Infobereich – das Handy findet den PC trotzdem. Optional mit dem Computer starten. |
 | **Updates** | Installierte Windows- und AppImage-Versionen aktualisieren sich selbst |
+| **Google-Konto** | Optional, falls YouTube ohne Anmeldung sperrt (siehe oben) |
 
 ### ⌨️ Tastatur (im Player)
 
@@ -72,8 +84,9 @@ wählen und die Adresse eingeben, die GX Tube Desktop auf der Startseite anzeigt
 - Die **offizielle** YouTube-App kann GX Tube Desktop nicht steuern – nur die GX Tube Android-App.
 - YouTube ändert regelmäßig seine Schnittstellen. Lädt nichts mehr, hilft meist eine neuere Version von
   YouTube.js (`package.json` → `youtubei.js`) – GitHub baut dann automatisch eine neue Version.
-- Wenn YouTube zu viele Anfragen aus deinem Netz sieht, verlangt es eine Bot-Bestätigung. Dann hilft warten.
-  Unter der Fehlermeldung zeigt „Details“, was jeder YouTube-Client geantwortet hat.
+- Wenn YouTube zu viele Anfragen aus deinem Netz sieht, verlangt es eine Bot-Bestätigung. Dann hilft
+  **mit Google anmelden** oder warten. Unter der Fehlermeldung steht, was jeder YouTube-Client geantwortet hat.
+- Lehnt Google die Anmeldung im Fenster ab („Browser nicht sicher“), meldet GX Tube das – dann später erneut versuchen.
 
 ## 🛠️ Selbst bauen
 
@@ -86,6 +99,7 @@ npm install
 npm start               # App starten
 npm test                # Unit-Tests
 npm run smoke           # App starten und wie das Handy fernsteuern (Linux ohne Bildschirm: xvfb-run npm run smoke)
+npm run test:account    # Anmeldefenster und Laden mit Konto durchspielen (ohne echtes Konto)
 npm run dist:win        # Windows-Installer → dist/  (auch dist:linux, dist:mac)
 
 # Fehlersuche: Video wie vom Handy abspielen, abgelehnte Anfragen anzeigen
@@ -100,6 +114,7 @@ BLOCK_CLIENT=IOS npm run debug:play -- dQw4w9WgXcQ 60   # simuliert eine YouTube
 | Programm | Electron, Oberfläche in reinem HTML/CSS/JS (ohne Framework) |
 | YouTube-Daten | YouTube.js (InnerTube): Suche, Vorschläge, Details, ähnliche Videos. Streams über mehrere YouTube-Clients (Mobile Web, iOS, TV …): Vor dem Abspielen wird die gewählte Qualität mitten in der Datei geprüft; lehnt YouTube während der Wiedergabe ab, geht es an derselben Stelle mit dem nächsten Client weiter |
 | PO-Token | Wie im Browser: YouTubes BotGuard läuft in einem unsichtbaren Fenster ([BgUtils](https://github.com/LuanRT/BgUtils)), damit bekommt Mobile Web gültige „Proof of Origin“-Tokens |
+| Google-Konto | Anmeldung in einem eigenen Chromium-Profil (`persist:gx-google`); Anfragen mit Konto laufen über dieses Profil, sodass von YouTube erneuerte Cookies gespeichert werden. Mit Konto: TV und Mobile Web (PO-Token an die DataSync-ID gebunden) |
 | Player | Shaka Player: Video- und Tonspur getrennt als DASH, Live-Streams als HLS |
 | Fernsteuerung | WebSocket (Port 8765) + UDP-Suche (Port 8766), siehe **[PROTOCOL.md](PROTOCOL.md)** |
 | Werbung im Video | SponsorBlock-API (Abfrage über Hash-Präfix, die Video-ID bleibt privat) |
@@ -112,6 +127,8 @@ src/
 │   ├── protocol.js          # Befehle prüfen, erlaubte Adressen
 │   ├── session.js           # Warteschlange, Weiter/Zurück, Autoplay
 │   ├── youtube.js           # alle YouTube-Abfragen
+│   ├── potoken.js           # PO-Token (BotGuard im unsichtbaren Fenster)
+│   ├── account.js           # optionale Google-Anmeldung
 │   ├── sponsorblock.js
 │   ├── store.js             # Einstellungen, Verlauf (JSON im Benutzerordner)
 │   └── updater.js           # automatische Updates (GitHub-Releases)
@@ -119,6 +136,7 @@ src/
 └── renderer/                # Fenster: Startseite, Suche, Player, Einstellungen
 test/                        # Unit-Tests (node --test)
 test-e2e/smoke.mjs           # startet die echte App und steuert sie wie das Handy
+test-e2e/account-test.mjs    # Anmeldefenster, Laden mit Konto, Abmelden
 ```
 
 ## 📄 Lizenz

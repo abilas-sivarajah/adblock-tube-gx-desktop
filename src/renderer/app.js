@@ -20,6 +20,8 @@ const state = {
   settings: null,
   fullscreen: false,
   error: null,
+  errorSignIn: false,
+  account: { loggedIn: false },
   search: { query: '', next: null, loading: false },
 };
 
@@ -53,6 +55,8 @@ async function boot() {
   renderVolume();
   state.update = await gx.updateStatus();
   renderUpdate();
+  state.account = await gx.accountStatus();
+  $('btnSignIn').addEventListener('click', () => signIn());
   $('btnUpdate').addEventListener('click', () => gx.installUpdate());
   renderSpeedButton();
   renderFullscreenButton();
@@ -69,10 +73,11 @@ async function boot() {
 function bindEvents() {
   gx.onLoading(onLoading);
   gx.onSource(onSource);
-  gx.onError(({ token, message, details }) => {
+  gx.onError(({ token, message, details, signIn }) => {
     if (token !== state.token) return;
     state.error = message;
     state.errorDetails = Array.isArray(details) ? details : [];
+    state.errorSignIn = Boolean(signIn);
     renderStatus('error');
   });
   gx.onVideo(({ token, video: v }) => {
@@ -125,6 +130,10 @@ function bindEvents() {
     state.update = u;
     renderUpdate();
   });
+  gx.onAccount((a) => {
+    state.account = a;
+    renderAccount();
+  });
 }
 
 function onLoading({ token, video: v }) {
@@ -133,6 +142,7 @@ function onLoading({ token, video: v }) {
   state.details = null;
   state.error = null;
   state.errorDetails = [];
+  state.errorSignIn = false;
   state.segments = [];
   player.prepare(token);
   if (state.watch === 'hidden') setWatch('full');
@@ -660,6 +670,7 @@ function renderStatus(status) {
   const reasons = status === 'error' ? state.errorDetails ?? [] : [];
   $('errorReasons').hidden = reasons.length === 0;
   $('errorReasons').replaceChildren(...reasons.map((r) => el('li', null, r)));
+  renderSignInButton(status);
   if (status === 'paused' || status === 'ended' || status === 'error') $('controls').classList.add('show');
   else showControls();
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = playing ? 'playing' : status === 'paused' ? 'paused' : 'none';
@@ -953,6 +964,9 @@ async function renderSettings() {
     f.append(cats);
   }
 
+  f.append(el('h3', null, 'Google-Konto'));
+  f.append(accountRow());
+
   f.append(el('h3', null, 'Programm'));
   f.append(toggleRow('Im Hintergrund weiterlaufen', 'Schließen legt GX Tube in den Infobereich – das Handy findet den PC dann weiterhin', 'closeToTray'));
   f.append(toggleRow('Mit dem Computer starten', 'Startet unsichtbar im Infobereich, bereit zum Streamen', 'openAtLogin'));
@@ -1033,6 +1047,77 @@ function renderUpdate() {
   if (!row) return;
   row.querySelector('.update-text').textContent = updateText(u);
   fillUpdateButton(row.querySelector('button'));
+}
+
+// ------------------------------------------------------------------ Google-Konto
+
+let signingIn = false;
+
+async function signIn() {
+  if (signingIn) return;
+  signingIn = true;
+  renderAccount();
+  try {
+    state.account = await gx.login();
+  } catch (err) {
+    toast('Anmeldung fehlgeschlagen: ' + cleanError(err));
+  } finally {
+    signingIn = false;
+    renderAccount();
+  }
+}
+
+function accountText(a) {
+  if (a?.loggedIn) return 'Wird nur benutzt, wenn YouTube anonyme Anfragen sperrt („Bestätige, dass du kein Bot bist“) oder ein Video eine Anmeldung verlangt. Videos bleiben werbefrei.';
+  if (a?.expired) return 'Die Anmeldung ist abgelaufen oder wurde in deinem Google-Konto beendet. Melde dich neu an.';
+  return 'Optional. Hilft, wenn YouTube „Bestätige, dass du kein Bot bist“ meldet. Die Anmeldung bleibt nur auf diesem PC, Videos bleiben werbefrei.';
+}
+
+/** Zeile in den Einstellungen: Anmelden bzw. "Angemeldet als …" und Abmelden. */
+function accountRow() {
+  const row = el('div', 'set-row');
+  row.id = 'accountRow';
+  fillAccountRow(row);
+  return row;
+}
+
+function fillAccountRow(row) {
+  const a = state.account;
+  const label = el('div', 'label');
+  const title = a?.loggedIn ? (a.name ? `Angemeldet als ${a.name}` : 'Mit Google angemeldet') : a?.expired ? 'Anmeldung abgelaufen' : 'Nicht angemeldet';
+  label.append(el('b', null, title), el('span', null, accountText(a)));
+  const btn = el('button', a?.loggedIn ? 'pill small ghost' : 'pill small');
+  btn.textContent = signingIn ? 'Anmeldefenster ist offen …' : a?.loggedIn ? 'Abmelden' : a?.expired ? 'Neu anmelden' : 'Mit Google anmelden';
+  btn.disabled = signingIn;
+  btn.addEventListener('click', async () => {
+    if (state.account?.loggedIn) {
+      state.account = await gx.logout();
+      toast('Abgemeldet');
+      renderAccount();
+    } else signIn();
+  });
+  const parts = [];
+  if (a?.loggedIn && a.photo) {
+    const img = el('img', 'account-photo');
+    img.src = a.photo;
+    img.alt = '';
+    img.referrerPolicy = 'no-referrer';
+    parts.push(img);
+  }
+  row.replaceChildren(...parts, label, btn);
+}
+
+function renderSignInButton(status = player.status) {
+  const btn = $('btnSignIn');
+  btn.hidden = !(status === 'error' && state.errorSignIn && !state.account?.loggedIn);
+  btn.disabled = signingIn;
+  btn.textContent = signingIn ? 'Anmeldefenster ist offen …' : state.account?.expired ? 'Neu anmelden' : 'Mit Google anmelden';
+}
+
+function renderAccount() {
+  const row = $('accountRow');
+  if (row) fillAccountRow(row);
+  if (!$('errorBox').hidden) renderSignInButton('error');
 }
 
 // ------------------------------------------------------------------ Hinweise
