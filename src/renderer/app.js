@@ -143,6 +143,7 @@ function onLoading({ token, video: v }) {
   state.error = null;
   state.errorDetails = [];
   state.errorSignIn = false;
+  state.stream = null;
   state.segments = [];
   player.prepare(token);
   if (state.watch === 'hidden') setWatch('full');
@@ -155,9 +156,18 @@ function onLoading({ token, video: v }) {
   updateMediaSession();
 }
 
+let lastDegradedHint = 0;
+
 function onSource({ token, stream, startMs, maxQuality }) {
   if (token !== state.token) return;
+  state.stream = stream;
   player.load({ token, stream, startMs, maxQuality });
+  renderQualityButton();
+  // YouTube sperrt gerade die höheren Qualitäten – Bescheid sagen (nicht bei jedem Video)
+  if (stream?.degraded && Date.now() - lastDegradedHint > 10 * 60 * 1000) {
+    lastDegradedHint = Date.now();
+    toast(`YouTube gibt gerade nur ${qualityLabel(stream.maxHeight)} frei` + (stream.signIn && !state.account?.loggedIn ? ' – mit Google anmelden hilft meist (Qualität-Menü)' : ''));
+  }
 }
 
 function onSegments({ token, segments }) {
@@ -477,6 +487,10 @@ function openMenu(anchor, items, { title = null, above = false } = {}) {
   menu.replaceChildren();
   if (title) menu.append(el('div', 'menu-title', title));
   for (const item of items) {
+    if (item.note) {
+      menu.append(el('div', 'menu-note', item.note));
+      continue;
+    }
     const b = el('button');
     if (item.icon) b.append(icon(item.icon));
     else b.append(el('span', 'check', item.checked ? '✓' : ''));
@@ -571,6 +585,7 @@ function bindWatch() {
   $('volumeSlider').addEventListener('input', (e) => player.setVolume(Number(e.target.value)));
   video.addEventListener('volumechange', renderVolume);
   video.addEventListener('ratechange', renderSpeedButton);
+  video.addEventListener('resize', renderQualityButton);
 
   $('btnSpeed').addEventListener('click', (e) => {
     e.stopPropagation();
@@ -582,6 +597,12 @@ function bindWatch() {
     const heights = player.qualities();
     const items = [{ label: `Automatisch (bis ${qualityLabel(state.settings.maxQuality)})`, checked: player.fixedHeight === 0, run: () => player.setQuality(0) }];
     for (const h of heights) items.push({ label: qualityLabel(h), checked: player.fixedHeight === h, run: () => player.setQuality(h) });
+    const s = state.stream;
+    if (s?.degraded) {
+      // Höhere Qualität hat YouTube gerade gesperrt – nicht so tun, als gäbe es sie
+      items.push({ note: `Höhere Qualität sperrt YouTube gerade${s.kind === 'progressive' ? ` – läuft als ${qualityLabel(s.maxHeight)}-Datei` : ''}.` });
+      if (!state.account?.loggedIn) items.push({ label: 'Mit Google anmelden für bessere Qualität', icon: 'account', run: () => signIn() });
+    }
     openMenu($('btnQuality'), items, { title: 'Qualität', above: true });
   });
 
@@ -717,7 +738,9 @@ function renderSpeedButton() {
 }
 
 function renderQualityButton() {
-  const h = player.currentHeight();
+  // Was wirklich zu sehen ist: Beim Hochschalten läuft erst noch der Puffer in der alten Qualität,
+  // und die Datei mit Ton hat gar keine Spurauswahl
+  const h = video.videoHeight || player.currentHeight() || 0;
   $('btnQuality').textContent = h ? qualityLabel(h) : 'HD';
   $('btnQuality').hidden = player.isLive && !h;
 }

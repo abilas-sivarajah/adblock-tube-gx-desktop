@@ -351,8 +351,8 @@ async function login() {
   send('account', Account.status());
   toast('Mit Google angemeldet');
   loadAccountProfile();
-  // Ist gerade ein Video gescheitert? Gleich nochmal – diesmal mit Konto
-  if (current?.error) loadVideo({ video: current.video, startMs: playback.positionMs || current.startMs });
+  // Ist gerade ein Video gescheitert oder läuft nur in niedriger Qualität? Gleich nochmal – diesmal mit Konto
+  if (current?.error || current?.stream?.degraded) loadVideo({ video: current.video, startMs: playback.positionMs || current.startMs });
   return Account.status();
 }
 

@@ -71,3 +71,13 @@ test('Mit Google-Konto gibt es weitere Clients zum Ausweichen', async () => {
   assert.equal(yt.clientsLeft([...all, ...yt.ACCOUNT_CLIENTS.map((c) => 'Konto ' + c)]), 0);
   yt.configure({ account: null });
 });
+
+test('Notlösung: höchste Qualität gewinnt, bei Gleichstand DASH', async () => {
+  const { bestCandidate } = await import('../src/main/youtube.js');
+  assert.equal(bestCandidate([]), null);
+  const file = { kind: 'progressive', maxHeight: 360, client: 'MWEB' };
+  const dash360 = { kind: 'dash', maxHeight: 360, client: 'IOS' };
+  const dash720 = { kind: 'dash', maxHeight: 720, client: 'Konto TV' };
+  assert.equal(bestCandidate([file, dash360]), dash360);
+  assert.equal(bestCandidate([file, dash720, dash360]), dash720);
+});

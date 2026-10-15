@@ -87,6 +87,9 @@ der Fehlermeldung) den Knopf **„Mit Google anmelden“**:
 - Wenn YouTube zu viele Anfragen aus deinem Netz sieht, verlangt es eine Bot-Bestätigung. Dann hilft
   **mit Google anmelden** oder warten. Unter der Fehlermeldung steht, was jeder YouTube-Client geantwortet hat.
 - Lehnt Google die Anmeldung im Fenster ab („Browser nicht sicher“), meldet GX Tube das – dann später erneut versuchen.
+- Sperrt YouTube die höheren Qualitäten, fragt GX Tube noch einen weiteren Client und nimmt sonst die beste
+  freigegebene Qualität (notfalls die 360p-Datei). Der Qualitäts-Knopf zeigt immer die echte Auflösung, das
+  Qualitäts-Menü sagt dann „Höhere Qualität sperrt YouTube gerade“ – mit Google angemeldet geht es meist wieder in HD.
 
 ## 🛠️ Selbst bauen
 

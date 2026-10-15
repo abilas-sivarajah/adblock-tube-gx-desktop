@@ -382,6 +382,14 @@ const FAILURE_PENALTY_MS = 60 * 60 * 1000;
 const ACCOUNT_FIRST_MS = 30 * 60 * 1000;
 let accountFirstUntil = 0;
 const AGE_REASON = /\bage\b|\balter\b|altersbeschr|inappropriate|ungeeignet/i;
+// Liefert ein Client nur eine niedrigere Qualität, wird höchstens noch ein weiterer gefragt
+// (pro Gruppe; zu viele Anfragen lösen bei YouTube die Bot-Sperre aus).
+const EXTRA_AFTER_DEGRADED = 1;
+
+/** Bestes Ergebnis unter den Notlösungen: höchste Auflösung, bei Gleichstand DASH vor der Datei mit Ton. */
+export function bestCandidate(candidates) {
+  return [...candidates].sort((a, b) => (b.maxHeight || 0) - (a.maxHeight || 0) || (a.kind === 'dash' ? -1 : 0) - (b.kind === 'dash' ? -1 : 0))[0] ?? null;
+}
 
 export function reportClientFailure(clientName) {
   if (clientName) clientFailures.set(clientName, Date.now());
@@ -403,12 +411,16 @@ export function clientsLeft(exclude = []) {
 
 /**
  * Probiert die Clients einer Gruppe (anonym oder mit Konto) der Reihe nach.
- * Gibt den ersten abspielbaren Stream zurück, sonst null (Gründe in [ctx.reasons]).
+ * Gibt den ersten Stream in voller Qualität zurück, sonst null. Gründe landen in [ctx.reasons],
+ * Streams in niedrigerer Qualität (YouTube sperrt die höheren) in [ctx.candidates].
  */
 async function tryClients(id, group, ctx) {
   const { yt } = group;
   let botBlocks = 0;
+  let degraded = false;
+  let extra = 0;
   for (const clientName of group.clients) {
+    if (degraded && extra++ >= EXTRA_AFTER_DEGRADED) break;
     const label = group.prefix + clientName;
     try {
       const po = await poTokensFor(yt, clientName, id, group.binding);
@@ -473,10 +485,18 @@ async function tryClients(id, group, ctx) {
           // Nur Videospuren bis zur geprüften Auflösung – darüber sperrt YouTube
           format_filter: (f) => f.has_video && (f.height || 0) > cap,
         });
-        return { ...meta, kind: 'dash', manifest, maxHeight: cap, poToken: Boolean(po), note: tried.length > 1 ? `höhere Qualität gesperrt (${tried.slice(0, -1).join(', ')})` : null };
+        const result = { ...meta, kind: 'dash', manifest, maxHeight: cap, poToken: Boolean(po), degraded: tried.length > 1, note: tried.length > 1 ? `höhere Qualität gesperrt (${tried.slice(0, -1).join(', ')})` : null };
+        if (!result.degraded) return result;
+        ctx.candidates.push(result);
+        degraded = true;
+        continue;
       }
       if (muxed && (await works(muxed))) {
-        return { ...meta, kind: 'progressive', url: await muxed.decipher(yt.session.player), maxHeight: muxed.height, poToken: Boolean(po), note: 'nur Datei mit Ton (niedrige Qualität)' };
+        const result = { ...meta, kind: 'progressive', url: await muxed.decipher(yt.session.player), maxHeight: muxed.height, poToken: Boolean(po), degraded: (muxed.height || 0) < (heights[0] ?? 0), note: 'nur Datei mit Ton (niedrige Qualität)' };
+        if (!result.degraded) return result;
+        ctx.candidates.push(result);
+        degraded = true;
+        continue;
       }
       const what = !audio ? 'keine Tonspur' : !audioOk ? 'Ton' : `Video ${tried.join(', ') || 'keine Spur'}`;
       ctx.reasons.push(`${label}: Stream gesperrt (${what}${muxed ? ', auch die 360p-Datei' : ''})`);
@@ -503,7 +523,7 @@ async function tryClients(id, group, ctx) {
  */
 export async function stream(id, { maxHeight = 1080, exclude = [], clients = preferredClients(exclude), check = true } = {}) {
   if (!VIDEO_ID.test(id)) throw new Error('Ungültige Video-ID');
-  const ctx = { reasons: [], maxHeight, check, fetchImpl: options.fetch ?? globalThis.fetch };
+  const ctx = { reasons: [], candidates: [], maxHeight, check, fetchImpl: options.fetch ?? globalThis.fetch };
   const withAccount = Boolean(options.account?.loggedIn());
 
   const anonymous = async () => {
@@ -517,6 +537,11 @@ export async function stream(id, { maxHeight = 1080, exclude = [], clients = pre
   };
   const accountFirst = withAccount && Date.now() < accountFirstUntil;
   const order = !withAccount ? [anonymous] : accountFirst ? [account, anonymous] : [anonymous, account];
+  const chosen = (result) => {
+    // Anonym ging es nicht (oder nur schlechter), mit Konto schon: die nächste halbe Stunde gleich mit Konto
+    if (result.account && !accountFirst) accountFirstUntil = Date.now() + ACCOUNT_FIRST_MS;
+    return { ...result, signIn: Boolean(result.degraded && !withAccount) };
+  };
 
   let setupError = null;
   let accountExpired = false;
@@ -534,12 +559,11 @@ export async function stream(id, { maxHeight = 1080, exclude = [], clients = pre
       continue;
     }
     const result = await tryClients(id, g, ctx);
-    if (result) {
-      // Anonym ging es nicht, mit Konto schon: die nächste halbe Stunde gleich mit Konto
-      if (g.account && !accountFirst) accountFirstUntil = Date.now() + ACCOUNT_FIRST_MS;
-      return result;
-    }
+    if (result) return chosen(result);
   }
+  // Keiner in voller Qualität: die beste Notlösung nehmen
+  const fallback = bestCandidate(ctx.candidates);
+  if (fallback) return chosen(fallback);
   if (setupError && !ctx.reasons.length) throw setupError;
 
   const reasons = ctx.reasons;
