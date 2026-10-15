@@ -1,10 +1,13 @@
 // Freiwillige Anmeldung mit dem Google-Konto (wie in der Android-App): Hilft, wenn YouTube
 // anonyme Anfragen aus deinem Netz mit "Bestätige, dass du kein Bot bist" blockiert.
-// Die Anmeldung lebt in einem eigenen Browser-Profil auf diesem PC. Anfragen mit Konto laufen
-// über dieses Profil, damit von YouTube erneuerte Cookies gleich gespeichert werden.
-// Videos laufen weiterhin ohne Werbung.
+// Videos laufen weiterhin ohne Werbung. Zwei Wege:
+//  - 'device': wie YouTube auf dem Fernseher – der PC zeigt einen Code, bestätigt wird auf dem
+//    Handy unter google.com/device. Gespeichert werden nur die Tokens (verschlüsselt, wenn das
+//    Betriebssystem es anbietet).
+//  - 'cookies': Anmeldung im Fenster. Sie lebt in einem eigenen Browser-Profil auf diesem PC;
+//    Anfragen mit Konto laufen über dieses Profil, damit erneuerte Cookies gespeichert werden.
 
-import { BrowserWindow, session, shell } from 'electron';
+import { BrowserWindow, net, safeStorage, session, shell } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -15,7 +18,7 @@ const LOGIN_URL =
 const AUTH_COOKIES = new Set(['SAPISID', '__Secure-3PAPISID']);
 
 let file = null;
-let info = null; // { since, name, photo, expired }
+let info = null; // { method, since, name, photo, expired, tokens? }
 let loginWindow = null;
 let profileSession = null;
 
@@ -48,10 +51,52 @@ function save(next) {
   }
 }
 
-/** Für die Oberfläche: angemeldet, abgelaufen, Name/Bild. */
+/** Für die Oberfläche: angemeldet, abgelaufen, wie, Name/Bild. */
 export function status() {
   if (!info) return { loggedIn: false, expired: false };
-  return { loggedIn: !info.expired, expired: Boolean(info.expired), name: info.name ?? null, photo: info.photo ?? null };
+  return { loggedIn: !info.expired, expired: Boolean(info.expired), method: method(), name: info.name ?? null, photo: info.photo ?? null };
+}
+
+/** 'device' (Code vom Handy), 'cookies' (Anmeldefenster) oder null. */
+export function method() {
+  return info ? (info.method ?? 'cookies') : null;
+}
+
+// ------------------------------------------------------------------ Code vom Handy (Tokens)
+
+function seal(tokens) {
+  try {
+    if (safeStorage.isEncryptionAvailable()) return { sealed: safeStorage.encryptString(JSON.stringify(tokens)).toString('base64') };
+  } catch {
+    // dann eben ohne
+  }
+  return { plain: tokens };
+}
+
+function unseal(box) {
+  try {
+    if (box?.sealed) return JSON.parse(safeStorage.decryptString(Buffer.from(box.sealed, 'base64')));
+    return box?.plain ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Tokens der Anmeldung per Code (null = nicht so angemeldet). */
+export function deviceTokens() {
+  return method() === 'device' && !info.expired ? unseal(info.tokens) : null;
+}
+
+/** Anmeldung per Code ist durch: Tokens merken (eine Anmeldung im Fenster wird ersetzt). */
+export async function saveDevice(tokens) {
+  if (method() === 'cookies') await clearProfile();
+  save({ method: 'device', since: Date.now(), name: null, photo: null, tokens: seal(tokens) });
+}
+
+/** YouTube.js hat das Zugangs-Token erneuert. */
+export function updateDeviceTokens(tokens) {
+  if (method() !== 'device' || !tokens?.refresh_token) return;
+  save({ ...info, tokens: seal(tokens) });
 }
 
 /** Kann gerade mit Konto geladen werden? */
@@ -70,7 +115,7 @@ async function youtubeCookies() {
 
 /** Aktuelle youtube.com-Cookies aus dem Anmelde-Profil als Cookie-Kopfzeile (null = nicht angemeldet). */
 export async function cookieHeader() {
-  if (!loggedIn()) return null;
+  if (!loggedIn() || method() !== 'cookies') return null;
   const cookies = await youtubeCookies();
   if (!cookies.some((c) => AUTH_COOKIES.has(c.name))) return null;
   return cookies.map((c) => `${c.name}=${c.value}`).join('; ');
@@ -127,7 +172,7 @@ export function login(parent) {
       if (!/^https:\/\/(www|m)\.youtube\.com\//.test(url)) return;
       if (!(await youtubeCookies()).some((c) => AUTH_COOKIES.has(c.name))) return;
       await ses().cookies.flushStore().catch(() => {});
-      save({ since: Date.now(), name: null, photo: null });
+      save({ method: 'cookies', since: Date.now(), name: null, photo: null });
       finish('ok');
     };
     win.webContents.on('did-navigate', check);
@@ -148,12 +193,21 @@ export function setProfile(name, photo) {
   save({ ...info, name: name || info.name || null, photo: photo || info.photo || null });
 }
 
-/** Abmelden: Cookies und alles andere aus dem Anmelde-Profil löschen. */
-export async function logout() {
-  save(null);
+async function clearProfile() {
   try {
     await ses().clearStorageData();
   } catch {
     // egal
+  }
+}
+
+/** Abmelden: Tokens bei Google widerrufen bzw. Cookies und alles andere aus dem Anmelde-Profil löschen. */
+export async function logout() {
+  const tokens = method() === 'device' ? unseal(info.tokens) : null;
+  save(null);
+  await clearProfile();
+  if (tokens?.refresh_token) {
+    const url = `https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(tokens.refresh_token)}`;
+    await net.fetch(url, { method: 'POST' }).catch(() => {});
   }
 }

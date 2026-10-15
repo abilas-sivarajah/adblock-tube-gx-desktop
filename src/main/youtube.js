@@ -1,7 +1,7 @@
 // Alle YouTube-Abfragen über YouTube.js (InnerTube) – ohne Werbedaten.
 // Läuft im Hauptprozess; der Player im Fenster bekommt nur fertige Manifeste.
 
-import { Innertube, Platform, UniversalCache, Log } from 'youtubei.js';
+import { Innertube, Platform, UniversalCache, Log, YTNodes } from 'youtubei.js';
 
 Log.setLevel(Log.Level.NONE);
 
@@ -20,9 +20,14 @@ Platform.shim.eval = async (data, env) => {
  */
 export const STREAM_CLIENTS = ['MWEB', 'IOS', 'TV_SIMPLY', 'ANDROID_VR', 'TV'];
 
-// Mit Google-Konto: Diese Clients akzeptieren Konto-Cookies (TV braucht kein PO-Token)
+// Mit Google-Konto: Diese Clients akzeptieren Konto-Cookies (TV braucht kein PO-Token) …
 export const ACCOUNT_CLIENTS = ['TV', 'MWEB'];
+// … und diese die Anmeldung per Code (Token von YouTube auf dem Fernseher)
+export const DEVICE_CLIENTS = ['TV', 'TV_SIMPLY'];
 const ACCOUNT_PREFIX = 'Konto ';
+const EXPIRED_MESSAGE = 'Google-Anmeldung abgelaufen – bitte in den Einstellungen neu anmelden';
+// Erneuern des Tokens abgelehnt: in Google widerrufen oder abgelaufen
+const REFRESH_REJECTED = /refresh access token: 4\d\d|invalid_grant|Invalid tokens/i;
 
 // Diese Clients bekommen ein PO-Token (wie YouTube im Browser), wenn eins erzeugt werden kann
 const PO_CLIENTS = new Set(['MWEB', 'WEB']);
@@ -31,7 +36,7 @@ const BOT_REASON = /bot|sign in|anmelden|confirm you/i;
 export const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
 
 // poTokens: { available(): boolean, mint(binding): Promise<string> } – siehe potoken.js
-// account: { loggedIn(): boolean, cookieHeader(): Promise<string|null>, fetch, onExpired() } – siehe account.js
+// account: { loggedIn(), method(), cookieHeader(), deviceTokens(), onTokens(tokens), fetch, onExpired() } – siehe account.js
 let options = { lang: 'de', location: 'DE', fetch: undefined, cacheDir: undefined, poTokens: null, account: null };
 let clientPromise = null;
 let accountPromise = null;
@@ -83,7 +88,39 @@ export function parseYtcfg(html) {
   };
 }
 
+function accountMethod() {
+  return options.account?.loggedIn() ? (options.account.method?.() ?? 'cookies') : null;
+}
+
+/** Konto-Client mit der Anmeldung per Code: Innertube mit den Tokens (Bearer), wie YouTube auf dem Fernseher. */
+async function createDeviceClient() {
+  const acc = options.account;
+  const tokens = acc.deviceTokens?.();
+  if (!tokens) throw new AccountError('nicht angemeldet');
+  const yt = await Innertube.create({
+    lang: options.lang,
+    location: options.location,
+    retrieve_player: true,
+    generate_session_locally: true,
+    enable_session_cache: false,
+    fetch: options.fetch,
+    cache: cache(),
+  });
+  yt.session.on('update-credentials', ({ credentials }) => acc.onTokens?.({ ...credentials }));
+  try {
+    await yt.session.signIn({ ...tokens });
+  } catch (e) {
+    if (REFRESH_REJECTED.test(String(e?.message))) {
+      acc.onExpired?.();
+      throw new AccountError(EXPIRED_MESSAGE);
+    }
+    throw e;
+  }
+  return { yt, dataSyncId: null, clients: DEVICE_CLIENTS };
+}
+
 async function createAccountClient() {
+  if (accountMethod() === 'device') return createDeviceClient();
   const acc = options.account;
   const cookie = acc?.loggedIn() ? await acc.cookieHeader() : null;
   if (!cookie) throw new AccountError('nicht angemeldet');
@@ -97,7 +134,7 @@ async function createAccountClient() {
   }
   if (cfg.loggedIn === false) {
     acc.onExpired?.();
-    throw new AccountError('Google-Anmeldung abgelaufen – bitte in den Einstellungen neu anmelden');
+    throw new AccountError(EXPIRED_MESSAGE);
   }
   const yt = await Innertube.create({
     lang: options.lang,
@@ -110,7 +147,7 @@ async function createAccountClient() {
     fetch: acc.fetch,
     cache: cache(),
   });
-  return { yt, dataSyncId: cfg.dataSyncId };
+  return { yt, dataSyncId: cfg.dataSyncId, clients: ACCOUNT_CLIENTS };
 }
 
 function accountClient() {
@@ -131,8 +168,15 @@ export function resetAccount() {
 
 /** Name und Bild des angemeldeten Kontos (nur zur Anzeige). */
 export async function accountProfile() {
-  const { yt } = await accountClient();
-  const items = await yt.account.getInfo(true);
+  const { yt, clients } = await accountClient();
+  let items;
+  if (clients === DEVICE_CLIENTS) {
+    // Mit dem Fernseher-Token antwortet nur der TV-Client
+    const info = await yt.account.getInfo(false);
+    items = info.page?.contents_memo?.getType(YTNodes.AccountItem) ?? [];
+  } else {
+    items = await yt.account.getInfo(true);
+  }
   const me = items.find((i) => i.is_selected) ?? items[0];
   if (!me) return null;
   return { name: text(me.account_name) || null, photo: bestThumb(me.account_photo) };
@@ -405,7 +449,9 @@ export function preferredClients(exclude = []) {
 /** Wie viele Clients bleiben für dieses Video noch übrig (angemeldet auch die mit Konto)? */
 export function clientsLeft(exclude = []) {
   const anonymous = STREAM_CLIENTS.filter((c) => !exclude.includes(c)).length;
-  const account = options.account?.loggedIn() ? ACCOUNT_CLIENTS.filter((c) => !exclude.includes(ACCOUNT_PREFIX + c)).length : 0;
+  const method = accountMethod();
+  const names = method === 'device' ? DEVICE_CLIENTS : method ? ACCOUNT_CLIENTS : [];
+  const account = names.filter((c) => !exclude.includes(ACCOUNT_PREFIX + c)).length;
   return anonymous + account;
 }
 
@@ -501,6 +547,14 @@ async function tryClients(id, group, ctx) {
       const what = !audio ? 'keine Tonspur' : !audioOk ? 'Ton' : `Video ${tried.join(', ') || 'keine Spur'}`;
       ctx.reasons.push(`${label}: Stream gesperrt (${what}${muxed ? ', auch die 360p-Datei' : ''})`);
     } catch (e) {
+      // Token in Google widerrufen: nicht weiter mit Konto probieren, Anmeldung als abgelaufen zeigen
+      if (group.account && REFRESH_REJECTED.test(String(e?.message))) {
+        options.account?.onExpired?.();
+        accountPromise = null;
+        ctx.accountExpired = true;
+        ctx.reasons.push(`Konto: ${EXPIRED_MESSAGE}`);
+        return null;
+      }
       ctx.reasons.push(`${label}: ${e?.message?.split('\n')[0] || e}`);
     } finally {
       yt.session.player.po_token = undefined;
@@ -531,8 +585,8 @@ export async function stream(id, { maxHeight = 1080, exclude = [], clients = pre
     return { yt, prefix: '', clients, binding: yt.session.context.client.visitorData };
   };
   const account = async () => {
-    const { yt, dataSyncId } = await accountClient();
-    const names = ACCOUNT_CLIENTS.filter((c) => !exclude.includes(ACCOUNT_PREFIX + c));
+    const { yt, dataSyncId, clients: accountClients } = await accountClient();
+    const names = accountClients.filter((c) => !exclude.includes(ACCOUNT_PREFIX + c));
     return { yt, prefix: ACCOUNT_PREFIX, clients: names, binding: dataSyncId, account: true };
   };
   const accountFirst = withAccount && Date.now() < accountFirstUntil;
@@ -575,7 +629,7 @@ export async function stream(id, { maxHeight = 1080, exclude = [], clients = pre
   const strip = (r) => r?.replace(/^(Konto )?[A-Z_]+: /, '');
   let message;
   let signIn = false;
-  if (accountExpired) {
+  if (accountExpired || ctx.accountExpired) {
     message = 'Deine Google-Anmeldung ist abgelaufen. Bitte melde dich neu an.';
     signIn = true;
   } else if (age) {
@@ -593,4 +647,85 @@ export async function stream(id, { maxHeight = 1080, exclude = [], clients = pre
     message = 'Video konnte nicht geladen werden: ' + (strip(tried.find((r) => !BOT_REASON.test(r))) || strip(reasons[0]) || 'unbekannter Fehler');
   }
   throw new StreamError(message, reasons, { signIn });
+}
+
+// ------------------------------------------------------------------ Anmeldung per Code
+
+const TOKEN_URL = 'https://www.youtube.com/o/oauth2/token';
+
+export class DeviceLoginError extends Error {
+  constructor(reason, detail) {
+    super(detail || reason);
+    this.reason = reason; // cancelled | expired | denied | error
+  }
+}
+
+/**
+ * Anmeldung wie YouTube auf dem Fernseher: Google gibt einen Code aus, den man auf dem Handy
+ * unter google.com/device eingibt. [done] löst mit den Tokens auf, sobald dort bestätigt wurde.
+ */
+export async function startDeviceLogin() {
+  const yt = await client().catch((e) => Promise.reject(friendlyError(e)));
+  const oauth = yt.session.oauth;
+  // Kennung von YouTube auf dem Fernseher (steht in dessen Skript)
+  oauth.client_id ??= await oauth.getClientID();
+  const identity = { ...oauth.client_id };
+  const code = await oauth.getDeviceAndUserCode();
+  const fetchImpl = options.fetch ?? globalThis.fetch;
+  const expiresAt = Date.now() + (Number(code.expires_in) || 1800) * 1000;
+  let timer = null;
+  let finished = false;
+  let fail = () => {};
+  const done = new Promise((resolve, reject) => {
+    let interval = Math.max(Number(code.interval) || 5, 2) * 1000;
+    const finish = (fn) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      fn();
+    };
+    fail = (err) => finish(() => reject(err));
+    const poll = async () => {
+      if (finished) return;
+      if (Date.now() > expiresAt) return fail(new DeviceLoginError('expired'));
+      try {
+        const res = await fetchImpl(TOKEN_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ client_id: identity.client_id, client_secret: identity.client_secret, code: code.device_code, grant_type: 'http://oauth.net/grant_type/device/1.0' }),
+        });
+        const data = await res.json();
+        if (finished) return;
+        if (data.access_token && data.refresh_token) {
+          const { expires_in: expiresIn, ...rest } = data;
+          const tokens = { ...rest, expiry_date: new Date(Date.now() + (Number(expiresIn) || 3600) * 1000).toISOString(), client: identity };
+          return finish(() => resolve(tokens));
+        }
+        switch (data.error) {
+          case 'authorization_pending':
+            break;
+          case 'slow_down':
+            interval += 5000;
+            break;
+          case 'access_denied':
+            return fail(new DeviceLoginError('denied'));
+          case 'expired_token':
+            return fail(new DeviceLoginError('expired'));
+          default:
+            return fail(new DeviceLoginError('error', data.error_description || data.error || `HTTP ${res.status}`));
+        }
+      } catch {
+        // kurzer Netzaussetzer: weiter warten
+      }
+      if (!finished) timer = setTimeout(poll, interval);
+    };
+    timer = setTimeout(poll, interval);
+  });
+  return {
+    userCode: code.user_code,
+    verificationUrl: code.verification_url || 'https://www.google.com/device',
+    expiresAt,
+    done,
+    cancel: () => fail(new DeviceLoginError('cancelled')),
+  };
 }

@@ -57,6 +57,9 @@ async function boot() {
   renderUpdate();
   state.account = await gx.accountStatus();
   $('btnSignIn').addEventListener('click', () => signIn());
+  $('signInDialog').addEventListener('click', (e) => {
+    if (e.target === $('signInDialog')) closeSignInDialog();
+  });
   $('btnUpdate').addEventListener('click', () => gx.installUpdate());
   renderSpeedButton();
   renderFullscreenButton();
@@ -134,6 +137,7 @@ function bindEvents() {
     state.account = a;
     renderAccount();
   });
+  gx.onDeviceLogin(onDeviceLogin);
 }
 
 function onLoading({ token, video: v }) {
@@ -861,6 +865,10 @@ function bindMediaKeys() {
 function bindKeys() {
   bindMediaKeys();
   document.addEventListener('keydown', (e) => {
+    if (!$('signInDialog').hidden) {
+      if (e.key === 'Escape') closeSignInDialog();
+      return;
+    }
     if (e.target.matches('input[type=text], input[type=search], select')) return;
     if (state.watch !== 'full' || !state.video) {
       if (e.key === '/') {
@@ -1076,7 +1084,13 @@ function renderUpdate() {
 
 let signingIn = false;
 
-async function signIn() {
+/** Anmelden: Standard ist der Code fürs Handy (wie beim Fernseher), das Fenster gibt es als Alternative. */
+function signIn() {
+  openSignInDialog();
+}
+
+/** Anmeldung im Fenster am PC. */
+async function windowSignIn() {
   if (signingIn) return;
   signingIn = true;
   renderAccount();
@@ -1091,7 +1105,7 @@ async function signIn() {
 }
 
 function accountText(a) {
-  if (a?.loggedIn) return 'Wird nur benutzt, wenn YouTube anonyme Anfragen sperrt („Bestätige, dass du kein Bot bist“) oder ein Video eine Anmeldung verlangt. Videos bleiben werbefrei.';
+  if (a?.loggedIn) return (a.method === 'device' ? 'Per Code vom Handy angemeldet. ' : '') + 'Wird nur benutzt, wenn YouTube anonyme Anfragen sperrt („Bestätige, dass du kein Bot bist“), HD sperrt oder ein Video eine Anmeldung verlangt. Videos bleiben werbefrei.';
   if (a?.expired) return 'Die Anmeldung ist abgelaufen oder wurde in deinem Google-Konto beendet. Melde dich neu an.';
   return 'Optional. Hilft, wenn YouTube „Bestätige, dass du kein Bot bist“ meldet. Die Anmeldung bleibt nur auf diesem PC, Videos bleiben werbefrei.';
 }
@@ -1109,16 +1123,25 @@ function fillAccountRow(row) {
   const label = el('div', 'label');
   const title = a?.loggedIn ? (a.name ? `Angemeldet als ${a.name}` : 'Mit Google angemeldet') : a?.expired ? 'Anmeldung abgelaufen' : 'Nicht angemeldet';
   label.append(el('b', null, title), el('span', null, accountText(a)));
-  const btn = el('button', a?.loggedIn ? 'pill small ghost' : 'pill small');
-  btn.textContent = signingIn ? 'Anmeldefenster ist offen …' : a?.loggedIn ? 'Abmelden' : a?.expired ? 'Neu anmelden' : 'Mit Google anmelden';
-  btn.disabled = signingIn;
-  btn.addEventListener('click', async () => {
-    if (state.account?.loggedIn) {
+  const buttons = el('div', 'buttons');
+  if (a?.loggedIn) {
+    const out = el('button', 'pill small ghost', 'Abmelden');
+    out.addEventListener('click', async () => {
       state.account = await gx.logout();
       toast('Abgemeldet');
       renderAccount();
-    } else signIn();
-  });
+    });
+    buttons.append(out);
+  } else {
+    const phone = el('button', 'pill small', a?.expired ? 'Neu anmelden (Handy)' : 'Mit dem Handy anmelden');
+    phone.title = 'Der PC zeigt einen Code, den du auf dem Handy unter google.com/device eingibst – wie bei YouTube auf dem Fernseher';
+    phone.addEventListener('click', () => openSignInDialog());
+    const here = el('button', 'pill small ghost', signingIn ? 'Anmeldefenster ist offen …' : 'Hier im Fenster');
+    here.title = 'Google-Anmeldeseite hier am PC öffnen';
+    here.disabled = signingIn;
+    here.addEventListener('click', () => windowSignIn());
+    buttons.append(phone, here);
+  }
   const parts = [];
   if (a?.loggedIn && a.photo) {
     const img = el('img', 'account-photo');
@@ -1127,7 +1150,102 @@ function fillAccountRow(row) {
     img.referrerPolicy = 'no-referrer';
     parts.push(img);
   }
-  row.replaceChildren(...parts, label, btn);
+  row.replaceChildren(...parts, label, buttons);
+}
+
+// Anmeldung per Code: Der PC zeigt den Code, bestätigt wird auf dem Handy unter google.com/device
+const signInDialog = { open: false, phase: null, info: null, message: null };
+let signInTimer = null;
+
+async function openSignInDialog() {
+  if (signInDialog.open) return;
+  signInDialog.open = true;
+  closeMenu();
+  await requestSignInCode();
+}
+
+async function requestSignInCode() {
+  signInDialog.phase = 'loading';
+  signInDialog.message = null;
+  renderSignInDialog();
+  try {
+    signInDialog.info = await gx.deviceLoginStart();
+    if (signInDialog.open) signInDialog.phase = 'code';
+  } catch (err) {
+    signInDialog.phase = 'error';
+    signInDialog.message = cleanError(err);
+  }
+  renderSignInDialog();
+}
+
+function closeSignInDialog({ cancel = true } = {}) {
+  if (!signInDialog.open) return;
+  if (cancel && signInDialog.phase === 'code') gx.deviceLoginCancel();
+  signInDialog.open = false;
+  signInDialog.phase = null;
+  renderSignInDialog();
+}
+
+function onDeviceLogin({ state: result, message }) {
+  if (!signInDialog.open || result === 'cancelled') return;
+  if (result === 'ok') {
+    closeSignInDialog({ cancel: false });
+    return;
+  }
+  signInDialog.phase = result;
+  signInDialog.message = message;
+  renderSignInDialog();
+}
+
+function renderSignInDialog() {
+  const d = signInDialog;
+  $('signInDialog').hidden = !d.open;
+  clearInterval(signInTimer);
+  if (!d.open) return;
+  const parts = [];
+  if (d.phase === 'loading') {
+    parts.push(el('p', 'dialog-wait', 'Code wird geholt …'));
+  } else if (d.phase === 'code') {
+    const url = d.info.verificationUrl.replace(/^https?:\/\/(www\.)?/, '');
+    const steps = el('ol');
+    const open = el('li', null, 'Öffne auf dem Handy ');
+    open.append(el('b', null, url));
+    steps.append(open, el('li', null, 'Gib diesen Code ein:'));
+    const code = el('div', 'device-code', d.info.userCode);
+    const steps2 = el('ol');
+    steps2.start = 3;
+    steps2.append(el('li', null, 'Wähle dein Google-Konto und tippe auf „Zulassen“.'));
+    const wait = el('p', 'dialog-wait');
+    const tick = () => {
+      const min = Math.max(0, Math.ceil((d.info.expiresAt - Date.now()) / 60000));
+      wait.textContent = `Warte auf dein Handy … (Code gilt noch ${min} Min.)`;
+    };
+    tick();
+    signInTimer = setInterval(tick, 5000);
+    parts.push(steps, code, steps2, wait, el('p', 'hint', 'Google fragt dabei nach „YouTube auf dem Fernseher“ – das ist richtig so: GX Tube meldet sich wie ein Fernseher an. Dein Passwort bekommt GX Tube nie.'));
+  } else {
+    const text = {
+      expired: 'Der Code ist abgelaufen.',
+      denied: 'Die Anmeldung wurde auf dem Handy abgelehnt.',
+    }[d.phase] ?? `Das hat nicht geklappt: ${d.message || 'unbekannter Fehler'}`;
+    const again = el('button', 'pill small', 'Neuen Code holen');
+    again.addEventListener('click', () => requestSignInCode());
+    const row = el('div', 'dialog-actions');
+    row.style.justifyContent = 'flex-start';
+    row.append(again);
+    parts.push(el('p', 'dialog-problem', text), row);
+  }
+  const actions = el('div', 'dialog-actions');
+  const here = el('button', 'pill small ghost', 'Lieber hier am PC anmelden');
+  here.addEventListener('click', () => {
+    closeSignInDialog();
+    windowSignIn();
+  });
+  const cancel = el('button', 'pill small ghost', 'Abbrechen');
+  cancel.addEventListener('click', () => closeSignInDialog());
+  actions.append(here, cancel);
+  parts.push(actions);
+  $('signInBody').replaceChildren(...parts);
 }
 
 function renderSignInButton(status = player.status) {

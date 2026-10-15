@@ -39,12 +39,15 @@ wählen und die Adresse eingeben, die GX Tube Desktop auf der Startseite anzeigt
 
 ## 🔑 Mit Google anmelden (optional)
 
-Manchmal sperrt YouTube Anfragen ohne Anmeldung aus deinem Netz („Bestätige, dass du kein Bot bist“)
-oder ein Video ist altersbeschränkt. Dafür gibt es in den **Einstellungen → Google-Konto** (und direkt in
-der Fehlermeldung) den Knopf **„Mit Google anmelden“**:
+Manchmal sperrt YouTube Anfragen ohne Anmeldung aus deinem Netz („Bestätige, dass du kein Bot bist“),
+gibt nur niedrige Qualität frei oder ein Video ist altersbeschränkt. Dafür gibt es in den
+**Einstellungen → Google-Konto** (und in der Fehlermeldung bzw. im Qualitäts-Menü) die Anmeldung:
 
-- Es öffnet sich Googles normale Anmeldeseite. Dein Passwort geht nur an Google, nie an GX Tube.
-- Die Anmeldung bleibt in einem eigenen Profil **nur auf diesem PC**; „Abmelden“ löscht sie wieder.
+- **Mit dem Handy anmelden** (wie YouTube auf dem Fernseher): Der PC zeigt einen Code. Auf dem Handy
+  **google.com/device** öffnen, Code eingeben, Konto wählen, „Zulassen“ – fertig, am PC muss nichts getippt werden.
+- **Hier im Fenster:** Googles normale Anmeldeseite direkt am PC.
+- Dein Passwort geht nur an Google, nie an GX Tube. Die Anmeldung bleibt **nur auf diesem PC**
+  (Tokens verschlüsselt über das Betriebssystem); „Abmelden“ löscht sie wieder und widerruft den Zugang.
 - GX Tube lädt Videos weiter **ohne** Konto. Erst wenn YouTube ablehnt, geht es mit Konto weiter –
   und danach für eine halbe Stunde gleich mit Konto. Videos bleiben werbefrei.
 
@@ -86,7 +89,7 @@ der Fehlermeldung) den Knopf **„Mit Google anmelden“**:
   YouTube.js (`package.json` → `youtubei.js`) – GitHub baut dann automatisch eine neue Version.
 - Wenn YouTube zu viele Anfragen aus deinem Netz sieht, verlangt es eine Bot-Bestätigung. Dann hilft
   **mit Google anmelden** oder warten. Unter der Fehlermeldung steht, was jeder YouTube-Client geantwortet hat.
-- Lehnt Google die Anmeldung im Fenster ab („Browser nicht sicher“), meldet GX Tube das – dann später erneut versuchen.
+- Lehnt Google die Anmeldung im Fenster ab („Browser nicht sicher“), meldet GX Tube das – dann mit dem Handy anmelden.
 - Sperrt YouTube die höheren Qualitäten, fragt GX Tube noch einen weiteren Client und nimmt sonst die beste
   freigegebene Qualität (notfalls die 360p-Datei). Der Qualitäts-Knopf zeigt immer die echte Auflösung, das
   Qualitäts-Menü sagt dann „Höhere Qualität sperrt YouTube gerade“ – mit Google angemeldet geht es meist wieder in HD.
@@ -102,7 +105,7 @@ npm install
 npm start               # App starten
 npm test                # Unit-Tests
 npm run smoke           # App starten und wie das Handy fernsteuern (Linux ohne Bildschirm: xvfb-run npm run smoke)
-npm run test:account    # Anmeldefenster und Laden mit Konto durchspielen (ohne echtes Konto)
+npm run test:account    # Code fürs Handy, Anmeldefenster und Laden mit Konto durchspielen (ohne echtes Konto)
 npm run dist:win        # Windows-Installer → dist/  (auch dist:linux, dist:mac)
 
 # Fehlersuche: Video wie vom Handy abspielen, abgelehnte Anfragen anzeigen
@@ -117,7 +120,7 @@ BLOCK_CLIENT=IOS npm run debug:play -- dQw4w9WgXcQ 60   # simuliert eine YouTube
 | Programm | Electron, Oberfläche in reinem HTML/CSS/JS (ohne Framework) |
 | YouTube-Daten | YouTube.js (InnerTube): Suche, Vorschläge, Details, ähnliche Videos. Streams über mehrere YouTube-Clients (Mobile Web, iOS, TV …): Vor dem Abspielen wird die gewählte Qualität mitten in der Datei geprüft; lehnt YouTube während der Wiedergabe ab, geht es an derselben Stelle mit dem nächsten Client weiter |
 | PO-Token | Wie im Browser: YouTubes BotGuard läuft in einem unsichtbaren Fenster ([BgUtils](https://github.com/LuanRT/BgUtils)), damit bekommt Mobile Web gültige „Proof of Origin“-Tokens |
-| Google-Konto | Anmeldung in einem eigenen Chromium-Profil (`persist:gx-google`); Anfragen mit Konto laufen über dieses Profil, sodass von YouTube erneuerte Cookies gespeichert werden. Mit Konto: TV und Mobile Web (PO-Token an die DataSync-ID gebunden) |
+| Google-Konto | Per Code: OAuth-Geräteanmeldung von YouTube auf dem Fernseher (google.com/device), Tokens mit Electron `safeStorage` verschlüsselt, geladen wird über die TV-Clients. Im Fenster: eigenes Chromium-Profil (`persist:gx-google`), Anfragen mit Konto laufen über dieses Profil (erneuerte Cookies bleiben gespeichert), geladen über TV und Mobile Web (PO-Token an die DataSync-ID gebunden) |
 | Player | Shaka Player: Video- und Tonspur getrennt als DASH, Live-Streams als HLS |
 | Fernsteuerung | WebSocket (Port 8765) + UDP-Suche (Port 8766), siehe **[PROTOCOL.md](PROTOCOL.md)** |
 | Werbung im Video | SponsorBlock-API (Abfrage über Hash-Präfix, die Video-ID bleibt privat) |
@@ -139,7 +142,7 @@ src/
 └── renderer/                # Fenster: Startseite, Suche, Player, Einstellungen
 test/                        # Unit-Tests (node --test)
 test-e2e/smoke.mjs           # startet die echte App und steuert sie wie das Handy
-test-e2e/account-test.mjs    # Anmeldefenster, Laden mit Konto, Abmelden
+test-e2e/account-test.mjs    # Code fürs Handy, Anmeldefenster, Laden mit Konto, Abmelden
 ```
 
 ## 📄 Lizenz

@@ -43,6 +43,8 @@ contextBridge.exposeInMainWorld('gx', {
   accountStatus: () => ipcRenderer.invoke('account:status'),
   login: () => ipcRenderer.invoke('account:login'),
   logout: () => ipcRenderer.invoke('account:logout'),
+  deviceLoginStart: () => ipcRenderer.invoke('account:deviceStart'),
+  deviceLoginCancel: () => ipcRenderer.send('account:deviceCancel'),
 
   onLoading: on('player:loading'),
   onSource: on('player:source'),
@@ -61,4 +63,5 @@ contextBridge.exposeInMainWorld('gx', {
   onShowWatch: on('ui:watch'),
   onUpdateStatus: on('update:status'),
   onAccount: on('account'),
+  onDeviceLogin: on('account:device'),
 });

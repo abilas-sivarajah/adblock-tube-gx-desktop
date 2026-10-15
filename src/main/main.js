@@ -65,7 +65,10 @@ async function start() {
     poTokens: { available: PoToken.available, mint: PoToken.mint },
     account: {
       loggedIn: Account.loggedIn,
+      method: Account.method,
       cookieHeader: Account.cookieHeader,
+      deviceTokens: Account.deviceTokens,
+      onTokens: Account.updateDeviceTokens,
       fetch: Account.accountFetch,
       onExpired: () => {
         Account.markExpired();
@@ -345,15 +348,47 @@ async function loadVideo({ video, startMs, exclude = [], fallback = false }) {
 
 async function login() {
   const result = await Account.login(win);
-  if (result === 'rejected') toast('Google hat die Anmeldung in diesem Fenster abgelehnt („Browser nicht sicher“). Bitte später nochmal versuchen.');
+  if (result === 'rejected') toast('Google hat die Anmeldung in diesem Fenster abgelehnt („Browser nicht sicher“). Melde dich stattdessen mit dem Handy an.');
   if (result !== 'ok') return Account.status();
+  deviceLogin?.cancel();
+  signedIn();
+  return Account.status();
+}
+
+function signedIn() {
   YT.resetAccount();
   send('account', Account.status());
   toast('Mit Google angemeldet');
   loadAccountProfile();
   // Ist gerade ein Video gescheitert oder läuft nur in niedriger Qualität? Gleich nochmal – diesmal mit Konto
   if (current?.error || current?.stream?.degraded) loadVideo({ video: current.video, startMs: playback.positionMs || current.startMs });
-  return Account.status();
+}
+
+// Anmeldung per Code (wie YouTube auf dem Fernseher): Code am PC, bestätigt wird auf dem Handy
+let deviceLogin = null; // { userCode, verificationUrl, expiresAt, done, cancel }
+
+async function startDeviceLogin() {
+  if (deviceLogin) return deviceInfo(deviceLogin);
+  const flow = await YT.startDeviceLogin();
+  deviceLogin = flow;
+  flow.done
+    .then(async (tokens) => {
+      await Account.saveDevice(tokens);
+      send('account:device', { state: 'ok' });
+      signedIn();
+    })
+    .catch((err) => {
+      console.warn('[konto] Code-Anmeldung:', err?.reason ?? err?.message ?? err);
+      send('account:device', { state: err?.reason ?? 'error', message: err?.message ?? String(err) });
+    })
+    .finally(() => {
+      if (deviceLogin === flow) deviceLogin = null;
+    });
+  return deviceInfo(flow);
+}
+
+function deviceInfo(flow) {
+  return { userCode: flow.userCode, verificationUrl: flow.verificationUrl, expiresAt: flow.expiresAt };
 }
 
 let profileLoading = false;
@@ -638,6 +673,8 @@ function setupIpc() {
   ipcMain.handle('account:status', () => Account.status());
   ipcMain.handle('account:login', () => login());
   ipcMain.handle('account:logout', () => logout());
+  ipcMain.handle('account:deviceStart', () => startDeviceLogin());
+  ipcMain.on('account:deviceCancel', () => deviceLogin?.cancel());
   ipcMain.handle('update:status', () => updateStatus());
   ipcMain.handle('update:check', () => checkForUpdates(true));
   ipcMain.handle('update:install', () => installUpdate());
