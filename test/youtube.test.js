@@ -68,8 +68,9 @@ test('Mit Google-Konto gibt es weitere Clients zum Ausweichen', async () => {
   assert.equal(yt.clientsLeft(yt.STREAM_CLIENTS), 1, 'SABR bleibt als Ausweg');
   assert.equal(yt.clientsLeft(all), 0);
   loggedIn = true;
-  assert.equal(yt.clientsLeft(all), yt.ACCOUNT_CLIENTS.length);
-  assert.equal(yt.clientsLeft([...all, ...yt.ACCOUNT_CLIENTS.map((c) => 'Konto ' + c)]), 0);
+  assert.equal(yt.clientsLeft(all), yt.ACCOUNT_CLIENTS.length + 1, 'Konto-Clients und SABR mit Konto');
+  assert.equal(yt.clientsLeft([...all, ...yt.ACCOUNT_CLIENTS.map((c) => 'Konto ' + c)]), 1);
+  assert.equal(yt.clientsLeft([...all, ...yt.ACCOUNT_CLIENTS.map((c) => 'Konto ' + c), 'Konto SABR TV']), 0);
   yt.configure({ account: null });
 });
 

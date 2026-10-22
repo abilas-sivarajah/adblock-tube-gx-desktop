@@ -305,11 +305,14 @@ class ShakaSabrAdapter {
  */
 export function attachSabr(player, sabr, { mintPoToken, reload }) {
   const adapter = new SabrStreamingAdapter({ playerAdapter: new ShakaSabrAdapter(), clientInfo: sabr.clientInfo });
-  let token = sabr.poToken || '';
-  adapter.onMintPoToken(async () => {
-    if (!token) token = (await mintPoToken().catch(() => '')) || '';
-    return token;
-  });
+  // PO-Token nur für Web-Clients (mit Konto über TV gibt es keins)
+  if (!sabr.noPoToken) {
+    let token = sabr.poToken || '';
+    adapter.onMintPoToken(async () => {
+      if (!token) token = (await mintPoToken().catch(() => '')) || '';
+      return token;
+    });
+  }
   adapter.onReloadPlayerResponse(async () => {
     const fresh = await reload();
     if (fresh?.url) adapter.setStreamingURL(fresh.url);
