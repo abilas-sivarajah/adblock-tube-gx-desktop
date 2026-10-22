@@ -81,3 +81,8 @@ test('Notlösung: höchste Qualität gewinnt, bei Gleichstand DASH', async () =>
   assert.equal(bestCandidate([file, dash360]), dash360);
   assert.equal(bestCandidate([file, dash720, dash360]), dash720);
 });
+
+test('Zuletzt erfolgreicher Client kommt zuerst (nur wenn vorhanden)', async () => {
+  const { withLastGoodFirst, STREAM_CLIENTS } = await import('../src/main/youtube.js');
+  assert.deepEqual(withLastGoodFirst(STREAM_CLIENTS, 'Test '), STREAM_CLIENTS);
+});

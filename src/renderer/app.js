@@ -492,7 +492,7 @@ function openMenu(anchor, items, { title = null, above = false } = {}) {
   if (title) menu.append(el('div', 'menu-title', title));
   for (const item of items) {
     if (item.note) {
-      menu.append(el('div', 'menu-note', item.note));
+      menu.append(el('div', item.small ? 'menu-note small' : 'menu-note', item.note));
       continue;
     }
     const b = el('button');
@@ -606,6 +606,8 @@ function bindWatch() {
       // Höhere Qualität hat YouTube gerade gesperrt – nicht so tun, als gäbe es sie
       items.push({ note: `Höhere Qualität sperrt YouTube gerade${s.kind === 'progressive' ? ` – läuft als ${qualityLabel(s.maxHeight)}-Datei` : ''}.` });
       if (!state.account?.loggedIn) items.push({ label: 'Mit Google anmelden für bessere Qualität', icon: 'account', run: () => signIn() });
+      // Was jeder YouTube-Zugang geliefert hat – hilft bei der Fehlersuche
+      if (s.attempts?.length) items.push({ note: s.attempts.join('\n'), small: true });
     }
     openMenu($('btnQuality'), items, { title: 'Qualität', above: true });
   });

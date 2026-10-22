@@ -18,12 +18,13 @@ Platform.shim.eval = async (data, env) => {
  * Reihenfolge der YouTube-Clients für die Streams. Nicht jeder liefert jedes Video,
  * und YouTube sperrt mal den einen, mal den anderen – also der Reihe nach probieren.
  */
-export const STREAM_CLIENTS = ['MWEB', 'IOS', 'TV_SIMPLY', 'ANDROID_VR', 'TV'];
+// (Stand Oktober 2026: Web/Mobile Web liefern oft nur noch die 360p-Datei, TV verlangt "Seite neu laden".)
+export const STREAM_CLIENTS = ['VISIONOS', 'TV_SIMPLY', 'IOS', 'MWEB', 'ANDROID_VR'];
 
 // Mit Google-Konto: Diese Clients akzeptieren Konto-Cookies (TV braucht kein PO-Token) …
-export const ACCOUNT_CLIENTS = ['TV', 'MWEB'];
+export const ACCOUNT_CLIENTS = ['TV', 'TV_SIMPLY', 'MWEB'];
 // … und diese die Anmeldung per Code (Token von YouTube auf dem Fernseher)
-export const DEVICE_CLIENTS = ['TV', 'TV_SIMPLY'];
+export const DEVICE_CLIENTS = ['TV_SIMPLY', 'TV'];
 const ACCOUNT_PREFIX = 'Konto ';
 const EXPIRED_MESSAGE = 'Google-Anmeldung abgelaufen – bitte in den Einstellungen neu anmelden';
 // Erneuern des Tokens abgelehnt: in Google widerrufen oder abgelaufen
@@ -426,9 +427,26 @@ const FAILURE_PENALTY_MS = 60 * 60 * 1000;
 const ACCOUNT_FIRST_MS = 30 * 60 * 1000;
 let accountFirstUntil = 0;
 const AGE_REASON = /\bage\b|\balter\b|altersbeschr|inappropriate|ungeeignet/i;
-// Liefert ein Client nur eine niedrigere Qualität, wird höchstens noch ein weiterer gefragt
-// (pro Gruppe; zu viele Anfragen lösen bei YouTube die Bot-Sperre aus).
-const EXTRA_AFTER_DEGRADED = 1;
+// Client, der zuletzt volle Qualität geliefert hat: kommt eine Weile zuerst dran (spart Anfragen)
+const lastGood = new Map(); // Gruppe ('' oder 'Konto ') → { client, at }
+const LAST_GOOD_MS = 60 * 60 * 1000;
+
+/** [names] mit dem zuletzt erfolgreichen Client vorne. */
+export function withLastGoodFirst(names, prefix = '') {
+  const good = lastGood.get(prefix);
+  if (!good || Date.now() - good.at > LAST_GOOD_MS || !names.includes(good.client)) return names;
+  return [good.client, ...names.filter((c) => c !== good.client)];
+}
+
+function rememberGood(prefix, client) {
+  lastGood.set(prefix, { client, at: Date.now() });
+}
+
+/** Ein Client hat nichts Brauchbares geliefert: Grund merken (auch für die Details). */
+function failed(ctx, reason) {
+  ctx.reasons.push(reason);
+  ctx.trail.push(reason);
+}
 
 /** Bestes Ergebnis unter den Notlösungen: höchste Auflösung, bei Gleichstand DASH vor der Datei mit Ton. */
 export function bestCandidate(candidates) {
@@ -463,10 +481,7 @@ export function clientsLeft(exclude = []) {
 async function tryClients(id, group, ctx) {
   const { yt } = group;
   let botBlocks = 0;
-  let degraded = false;
-  let extra = 0;
-  for (const clientName of group.clients) {
-    if (degraded && extra++ >= EXTRA_AFTER_DEGRADED) break;
+  for (const clientName of withLastGoodFirst(group.clients, group.prefix)) {
     const label = group.prefix + clientName;
     try {
       const po = await poTokensFor(yt, clientName, id, group.binding);
@@ -476,7 +491,7 @@ async function tryClients(id, group, ctx) {
       const status = info.playability_status;
       if (status?.status !== 'OK') {
         const reason = status?.reason || status?.status || 'nicht abspielbar';
-        ctx.reasons.push(`${label}: ${reason}`);
+        failed(ctx, `${label}: ${reason}`);
         // Privat / gelöscht: andere Clients ändern daran nichts
         if (status?.status === 'ERROR') return null;
         // Bot-Sperre gilt fürs ganze Netz – nicht alle Clients durchprobieren (das macht es nur schlimmer)
@@ -497,7 +512,7 @@ async function tryClients(id, group, ctx) {
       };
       if (b.is_live || b.is_post_live_dvr) {
         if (sd?.hls_manifest_url) return { ...meta, kind: 'hls', url: sd.hls_manifest_url };
-        ctx.reasons.push(`${label}: kein Live-Stream`);
+        failed(ctx, `${label}: kein Live-Stream`);
         continue;
       }
       const formats = sd?.adaptive_formats ?? [];
@@ -532,30 +547,34 @@ async function tryClients(id, group, ctx) {
           format_filter: (f) => f.has_video && (f.height || 0) > cap,
         });
         const result = { ...meta, kind: 'dash', manifest, maxHeight: cap, poToken: Boolean(po), degraded: tried.length > 1, note: tried.length > 1 ? `höhere Qualität gesperrt (${tried.slice(0, -1).join(', ')})` : null };
-        if (!result.degraded) return result;
+        ctx.trail.push(`${label}: ${cap}p${result.degraded ? ` (${tried.slice(0, -1).join(', ')} gesperrt)` : ''}`);
+        if (!result.degraded) {
+          rememberGood(group.prefix, clientName);
+          return result;
+        }
+        // Nur niedrigere Qualität: merken und die anderen Clients fragen
         ctx.candidates.push(result);
-        degraded = true;
         continue;
       }
       if (muxed && (await works(muxed))) {
         const result = { ...meta, kind: 'progressive', url: await muxed.decipher(yt.session.player), maxHeight: muxed.height, poToken: Boolean(po), degraded: (muxed.height || 0) < (heights[0] ?? 0), note: 'nur Datei mit Ton (niedrige Qualität)' };
+        ctx.trail.push(`${label}: nur ${muxed.height}p-Datei (${!audioOk ? 'Ton' : 'Video'} gesperrt)`);
         if (!result.degraded) return result;
         ctx.candidates.push(result);
-        degraded = true;
         continue;
       }
       const what = !audio ? 'keine Tonspur' : !audioOk ? 'Ton' : `Video ${tried.join(', ') || 'keine Spur'}`;
-      ctx.reasons.push(`${label}: Stream gesperrt (${what}${muxed ? ', auch die 360p-Datei' : ''})`);
+      failed(ctx, `${label}: Stream gesperrt (${what}${muxed ? ', auch die 360p-Datei' : ''})`);
     } catch (e) {
       // Token in Google widerrufen: nicht weiter mit Konto probieren, Anmeldung als abgelaufen zeigen
       if (group.account && REFRESH_REJECTED.test(String(e?.message))) {
         options.account?.onExpired?.();
         accountPromise = null;
         ctx.accountExpired = true;
-        ctx.reasons.push(`Konto: ${EXPIRED_MESSAGE}`);
+        failed(ctx, `Konto: ${EXPIRED_MESSAGE}`);
         return null;
       }
-      ctx.reasons.push(`${label}: ${e?.message?.split('\n')[0] || e}`);
+      failed(ctx, `${label}: ${e?.message?.split('\n')[0] || e}`);
     } finally {
       yt.session.player.po_token = undefined;
     }
@@ -577,7 +596,7 @@ async function tryClients(id, group, ctx) {
  */
 export async function stream(id, { maxHeight = 1080, exclude = [], clients = preferredClients(exclude), check = true } = {}) {
   if (!VIDEO_ID.test(id)) throw new Error('Ungültige Video-ID');
-  const ctx = { reasons: [], candidates: [], maxHeight, check, fetchImpl: options.fetch ?? globalThis.fetch };
+  const ctx = { reasons: [], candidates: [], trail: [], maxHeight, check, fetchImpl: options.fetch ?? globalThis.fetch };
   const withAccount = Boolean(options.account?.loggedIn());
 
   const anonymous = async () => {
@@ -594,7 +613,8 @@ export async function stream(id, { maxHeight = 1080, exclude = [], clients = pre
   const chosen = (result) => {
     // Anonym ging es nicht (oder nur schlechter), mit Konto schon: die nächste halbe Stunde gleich mit Konto
     if (result.account && !accountFirst) accountFirstUntil = Date.now() + ACCOUNT_FIRST_MS;
-    return { ...result, signIn: Boolean(result.degraded && !withAccount) };
+    // Was jeder Client geliefert hat (für "Details" im Qualitäts-Menü)
+    return { ...result, attempts: ctx.trail, signIn: Boolean(result.degraded && !withAccount) };
   };
 
   let setupError = null;
@@ -606,7 +626,7 @@ export async function stream(id, { maxHeight = 1080, exclude = [], clients = pre
     } catch (e) {
       if (group === account) {
         accountExpired = /abgelaufen/.test(e?.message ?? '');
-        ctx.reasons.push(`Konto: ${e?.message ?? e}`);
+        failed(ctx, `Konto: ${e?.message ?? e}`);
       } else {
         setupError ??= friendlyError(e);
       }

@@ -77,6 +77,8 @@ export class Player {
       manifest: { retryParameters: { maxAttempts: 2, baseDelay: 500, timeout: 20000 } },
       abr: {
         enabled: this.fixedHeight === 0,
+        // Gleich in guter Qualität starten (Standard: 1 Mbit/s ≈ 480p); ist die Leitung langsamer, schaltet Shaka herunter
+        defaultBandwidthEstimate: 8e6,
         restrictions: { maxHeight: this.maxQuality || Infinity },
       },
     });

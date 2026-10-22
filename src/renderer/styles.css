@@ -131,6 +131,7 @@ svg.i { width: 24px; height: 24px; fill: currentColor; display: block; }
 .menu button svg { width: 20px; height: 20px; fill: currentColor; }
 .menu button .check { width: 20px; text-align: center; }
 .menu .menu-title { padding: 6px 16px 8px; color: var(--text-2); font-size: 13px; }
+.menu .menu-note.small { white-space: pre-line; font-size: 11px; opacity: .8; user-select: text; }
 .menu .menu-note { width: 0; min-width: 100%; box-sizing: border-box; margin-top: 4px; padding: 8px 16px 6px; border-top: 1px solid rgba(255,255,255,.12); color: var(--text-2); font-size: 12px; line-height: 1.4; }
 
 /* ------------------------------------------------------------------ Einstellungen */
