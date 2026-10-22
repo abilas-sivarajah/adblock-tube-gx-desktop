@@ -1,7 +1,7 @@
 // GX Tube Desktop – Hauptprozess: Fenster, Tray, YouTube-Abfragen und der
 // Empfänger für die Android-App. Der Player selbst läuft im Fenster (renderer/).
 
-import { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, net, powerSaveBlocker, session as electronSession, shell } from 'electron';
+import { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, net, powerSaveBlocker, screen, session as electronSession, shell } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as YT from './youtube.js';
@@ -120,6 +120,7 @@ async function start() {
 
   setupIpc();
   createWindow();
+  for (const event of ['display-added', 'display-removed', 'display-metrics-changed']) screen.on(event, () => broadcastState());
   createTray();
   applyLoginItem();
   updates = setupUpdates({ enabled: () => store.settings.autoUpdate, toast, onStatus: (s) => send('update:status', s) });
@@ -182,8 +183,16 @@ function createWindow() {
     PoToken.dispose();
     win = null;
   });
-  win.on('enter-full-screen', () => send('window:fullscreen', true));
-  win.on('leave-full-screen', () => send('window:fullscreen', false));
+  win.on('enter-full-screen', () => {
+    send('window:fullscreen', true);
+    broadcastState();
+  });
+  win.on('leave-full-screen', () => {
+    send('window:fullscreen', false);
+    broadcastState();
+  });
+  // Auf welchem Bildschirm läuft GX Tube? (fürs Handy)
+  win.on('moved', () => broadcastState());
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https:\/\/(www\.)?(youtube\.com|youtu\.be|github\.com|sponsor\.ajay\.app)\//.test(url)) shell.openExternal(url);
@@ -278,7 +287,7 @@ function setupMediaHeaders() {
  * Video laden. [exclude]: YouTube-Clients, deren Stream bei diesem Video schon abgelehnt
  * wurde ([fallback] = gleiches Video, nur anderer Client – Details/SponsorBlock bleiben).
  */
-async function loadVideo({ video, startMs, exclude = [], fallback = false }) {
+async function loadVideo({ video, startMs, exclude = [], fallback = false, notes = [] }) {
   const previous = fallback && current?.video.id === video.id ? current : null;
   if (!previous) saveProgress();
   const token = ++loadToken;
@@ -292,6 +301,7 @@ async function loadVideo({ video, startMs, exclude = [], fallback = false }) {
     error: null,
     stream: null,
     exclude,
+    notes,
     attempts: (previous?.attempts ?? 0) + (previous ? 1 : 0),
   };
   playback = { ...playback, status: 'loading', positionMs: resume, durationMs: previous ? playback.durationMs : Math.max(0, video.durationSec * 1000), bufferedMs: 0 };
@@ -328,7 +338,7 @@ async function loadVideo({ video, startMs, exclude = [], fallback = false }) {
   }
 
   try {
-    const stream = await YT.stream(video.id, { maxHeight: store.settings.maxQuality, exclude });
+    const stream = await YT.stream(video.id, { maxHeight: store.settings.maxQuality, exclude, notes });
     if (token !== loadToken) return;
     current.stream = stream;
     current.resolvedAt = Date.now();
@@ -476,6 +486,63 @@ function saveProgress() {
   if (playback.positionMs > 0) store.updateProgress(current.video.id, playback.positionMs, playback.durationMs);
 }
 
+// ------------------------------------------------------------------ Bildschirme (vom Handy wählbar)
+
+function displayList() {
+  const primary = screen.getPrimaryDisplay().id;
+  return screen.getAllDisplays().map((d, i) => ({
+    id: d.id,
+    name: d.label || `Bildschirm ${i + 1}`,
+    primary: d.id === primary,
+    width: d.size.width,
+    height: d.size.height,
+  }));
+}
+
+function currentDisplayId() {
+  return win && !win.isDestroyed() ? screen.getDisplayMatching(win.getBounds()).id : null;
+}
+
+/** Fenster auf einen anderen Bildschirm schieben – Vollbild und maximiert bleiben erhalten. */
+function moveToDisplay(id) {
+  const target = screen.getAllDisplays().find((d) => d.id === id);
+  if (!win || !target || currentDisplayId() === id) return;
+  const wasFull = win.isFullScreen();
+  const wasMax = win.isMaximized();
+  const place = () => {
+    if (win.isMaximized()) win.unmaximize();
+    const area = target.workArea;
+    const [w, h] = win.getSize();
+    const width = Math.min(w, area.width);
+    const height = Math.min(h, area.height);
+    win.setBounds({ x: area.x + Math.round((area.width - width) / 2), y: area.y + Math.round((area.height - height) / 2), width, height });
+    if (wasMax) win.maximize();
+    if (wasFull) win.setFullScreen(true);
+    showWindow();
+    broadcastState();
+    // Nach dem Umschalten in den Vollbildmodus stehen die Maße erst etwas später fest
+    setTimeout(() => broadcastState(), 800);
+  };
+  if (wasFull) {
+    // Erst aus dem Vollbild, sonst lässt sich das Fenster nicht verschieben
+    win.once('leave-full-screen', () => setTimeout(place, 100));
+    win.setFullScreen(false);
+  } else {
+    place();
+  }
+}
+
+/** Vollbild ein/aus (ohne Angabe: umschalten). Beim Einschalten kommt das Video groß nach vorne. */
+function setFullscreen(on) {
+  if (!win) return;
+  const next = typeof on === 'boolean' ? on : !win.isFullScreen();
+  if (next) {
+    showWindow();
+    if (current) send('ui:watch', {});
+  }
+  win.setFullScreen(next);
+}
+
 function showForCast() {
   if (!win) return;
   if (store.settings.focusOnCast || !win.isVisible()) showWindow();
@@ -528,6 +595,12 @@ function onRemoteCommand(cmd, peer) {
     case 'stop':
       session.clear();
       break;
+    case 'fullscreen':
+      setFullscreen(cmd.on);
+      break;
+    case 'display':
+      moveToDisplay(cmd.id);
+      break;
     default:
       // pause, resume, toggle, seek, seekBy, volume, volumeBy, mute, speed → Player im Fenster
       send('player:command', cmd);
@@ -557,6 +630,10 @@ function stateMessage() {
     hasNext: session.hasNext || (session.autoplay && Boolean(session.nextRelated())),
     hasPrevious: session.index > 0,
     autoplay: session.autoplay,
+    // Fenster am PC: Vollbild und Bildschirm (zum Umschalten vom Handy)
+    fullscreen: Boolean(win && !win.isDestroyed() && win.isFullScreen()),
+    displayId: currentDisplayId(),
+    displays: displayList(),
   };
 }
 
@@ -681,23 +758,25 @@ function setupIpc() {
   });
   // YouTube hat den Stream mitten im Video abgelehnt (oder die Adresse ist abgelaufen):
   // an derselben Stelle mit dem nächsten YouTube-Client weitermachen.
-  ipcMain.on('player:failed', (_e, { token, positionMs, message, http }) => {
+  ipcMain.on('player:failed', (_e, { token, positionMs, message, http, detail }) => {
     if (!current || token !== current.token) return;
     const used = current.stream?.client;
+    // Für die Details: welcher Weg im Player gescheitert ist und warum
+    const notes = [...(current.notes ?? []), `${used ?? 'Stream'}: im Player gescheitert (${String(detail || message || 'Fehler').slice(0, 160)})`];
     // Nach langer Pause sind die Adressen einfach abgelaufen – dann ist der Client nicht schuld
     const expired = current.resolvedAt && Date.now() - current.resolvedAt > 45 * 60 * 1000;
     const exclude = used && !expired ? [...current.exclude, used] : current.exclude;
     if (http && used && !expired) YT.reportClientFailure(used);
     const left = YT.clientsLeft(exclude);
-    // Höchstens zweimal wechseln – viele Anfragen hintereinander lösen bei YouTube die Bot-Sperre aus
-    if (left > 0 && current.attempts < 2) {
-      console.warn(`[stream] ${used ?? '?'} abgelehnt bei ${Math.round((Number(positionMs) || 0) / 1000)} s – nächster Client`);
-      loadVideo({ video: current.video, startMs: Number(positionMs) || 0, exclude, fallback: true });
+    // Höchstens dreimal wechseln – viele Anfragen hintereinander lösen bei YouTube die Bot-Sperre aus
+    if (left > 0 && current.attempts < 3) {
+      console.warn(`[stream] ${used ?? '?'} abgelehnt bei ${Math.round((Number(positionMs) || 0) / 1000)} s – nächster Client (${detail ?? message})`);
+      loadVideo({ video: current.video, startMs: Number(positionMs) || 0, exclude, fallback: true, notes });
       return;
     }
     current.error = message || 'Wiedergabefehler';
     playback = { ...playback, status: 'error' };
-    send('player:error', { token, message: current.error });
+    send('player:error', { token, message: current.error, details: notes });
     broadcastState();
   });
 
@@ -710,7 +789,9 @@ function setupIpc() {
   ipcMain.handle('subs:set', (_e, channel, on) => setSubscribed(channel, on === true));
   ipcMain.handle('subs:feed', () => YT.subscriptionFeed(store.subscriptions));
   ipcMain.handle('potoken:mint', (_e, binding) => YT.mintPoToken(String(binding)));
-  ipcMain.handle('yt:sabrReload', (_e, id, client) => YT.sabrReload(String(id), String(client)));
+  ipcMain.handle('yt:sabrReload', (_e, id, client, reloadContext) =>
+    YT.sabrReload(String(id), String(client), reloadContext && typeof reloadContext === 'object' ? reloadContext : null),
+  );
   ipcMain.handle('account:status', () => Account.status());
   ipcMain.handle('account:login', () => login());
   ipcMain.handle('account:logout', () => logout());

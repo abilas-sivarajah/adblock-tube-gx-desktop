@@ -49,3 +49,12 @@ test('Suchanfrage im WLAN', () => {
   assert.ok(!isDiscoveryRequest(Buffer.from('hallo')));
   assert.ok(!isDiscoveryRequest(Buffer.alloc(4096, 32)));
 });
+
+test('Vollbild und Bildschirm vom Handy', () => {
+  assert.deepEqual(parseCommand('{"type":"fullscreen"}'), { type: 'fullscreen', on: null });
+  assert.deepEqual(parseCommand({ type: 'fullscreen', on: true }), { type: 'fullscreen', on: true });
+  assert.deepEqual(parseCommand({ type: 'fullscreen', on: 'ja' }), { type: 'fullscreen', on: null });
+  assert.deepEqual(parseCommand({ type: 'display', id: 2528732444 }), { type: 'display', id: 2528732444 });
+  assert.throws(() => parseCommand({ type: 'display', id: 'eins' }), ProtocolError);
+  assert.throws(() => parseCommand({ type: 'display' }), ProtocolError);
+});

@@ -78,6 +78,8 @@ Unbekannte Felder müssen ignoriert werden.
 | `mute` | `muted` | Stumm |
 | `speed` | `value` (0,25–3) | Geschwindigkeit |
 | `autoplay` | `enabled` | Autoplay an/aus |
+| `fullscreen` | `on` (optional) | Vollbild am PC an/aus – ohne `on` umschalten. Beim Einschalten kommt das Video groß nach vorne |
+| `display` | `id` | Fenster auf diesen Bildschirm verschieben (IDs aus `state.displays`), Vollbild bleibt erhalten |
 | `stop` | – | Wiedergabe beenden, Warteschlange leeren |
 
 Fehlerhafte Befehle beantwortet der PC mit `{ "type": "error", "message": "…" }`.
@@ -93,7 +95,10 @@ Fehlerhafte Befehle beantwortet der PC mit `{ "type": "error", "message": "…" 
   "positionMs": 61234, "durationMs": 213040, "bufferedMs": 90000,
   "volume": 80, "muted": false, "speed": 1, "isLive": false, "error": null,
   "segments": [ { "startMs": 10000, "endMs": 25000, "category": "sponsor", "label": "Sponsor", "uuid": "…" } ],
-  "queueIndex": 0, "queueLength": 3, "hasNext": true, "hasPrevious": false, "autoplay": true }
+  "queueIndex": 0, "queueLength": 3, "hasNext": true, "hasPrevious": false, "autoplay": true,
+  "fullscreen": false, "displayId": 1,
+  "displays": [ { "id": 1, "name": "DELL U2415", "primary": true, "width": 1920, "height": 1200 },
+                { "id": 2, "name": "Bildschirm 2", "primary": false, "width": 3840, "height": 2160 } ] }
 ```
 
 `status`: `idle` (nichts geladen), `loading`, `buffering`, `playing`, `paused`, `ended`, `error` (dann steht der Grund in `error`).

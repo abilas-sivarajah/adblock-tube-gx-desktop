@@ -313,8 +313,9 @@ export function attachSabr(player, sabr, { mintPoToken, reload }) {
       return token;
     });
   }
-  adapter.onReloadPlayerResponse(async () => {
-    const fresh = await reload();
+  adapter.onReloadPlayerResponse(async (reloadContext) => {
+    // Den Kontext aus der Reload-Aufforderung mitschicken – ohne ihn lehnt YouTube manche Videos ab
+    const fresh = await reload(reloadContext);
     if (fresh?.url) adapter.setStreamingURL(fresh.url);
     if (fresh?.ustreamerConfig) adapter.setUstreamerConfig(fresh.ustreamerConfig);
   });

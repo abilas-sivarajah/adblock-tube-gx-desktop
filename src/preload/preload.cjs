@@ -38,7 +38,7 @@ contextBridge.exposeInMainWorld('gx', {
   setSubscribed: (channel, on) => ipcRenderer.invoke('subs:set', channel, on),
   subscriptionFeed: () => ipcRenderer.invoke('subs:feed'),
   mintPoToken: (binding) => ipcRenderer.invoke('potoken:mint', binding),
-  sabrReload: (id, client) => ipcRenderer.invoke('yt:sabrReload', id, client),
+  sabrReload: (id, client, reloadContext) => ipcRenderer.invoke('yt:sabrReload', id, client, reloadContext),
 
   setFullscreen: (on) => ipcRenderer.send('window:fullscreen', on),
   isFullscreen: () => ipcRenderer.invoke('window:isFullscreen'),

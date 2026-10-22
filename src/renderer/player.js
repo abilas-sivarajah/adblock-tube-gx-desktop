@@ -6,6 +6,23 @@
 import { attachSabr } from './sabr.js';
 
 const REPORT_EVERY_MS = 1000;
+
+/** Kurzer Grund für die Details ("HTTP 403", "Server streaming error, Schutzstatus 3" …). */
+function errorDetail(err) {
+  const code = err?.code;
+  if (code === 1001) return `HTTP ${err.data?.[1] ?? '?'}`;
+  if (code === 1002) {
+    const first = typeof err.data?.[0] === 'string' && !/^(https?|sabr):/.test(err.data[0]) ? err.data[0] : '';
+    const meta = err.data?.[1]?.info;
+    const protection = meta?.streamInfo?.streamProtectionStatus?.status;
+    const sabrError = meta?.error?.sabrError;
+    return [first || 'Verbindungsfehler', protection ? `Schutzstatus ${protection}` : '', sabrError ? `SABR-Fehler ${[sabrError.type, sabrError.code].filter((x) => x != null).join(' ')}` : '']
+      .filter(Boolean)
+      .join(', ');
+  }
+  if (code === 1003) return 'Zeitüberschreitung';
+  return `Fehler ${code ?? '?'}`;
+}
 const SAVE_EVERY_MS = 10000;
 
 export class Player {
@@ -185,7 +202,7 @@ export class Player {
         // Wie der YouTube-Webplayer: Stücke per SABR holen (siehe sabr.js)
         this.sabr = attachSabr(this.shaka, stream.sabr, {
           mintPoToken: () => window.gx.mintPoToken(stream.id),
-          reload: () => window.gx.sabrReload(stream.id, stream.client),
+          reload: (reloadContext) => window.gx.sabrReload(stream.id, stream.client, reloadContext ?? null),
         });
         const uri = 'data:application/dash+xml;base64,' + btoa(unescape(encodeURIComponent(stream.manifest)));
         await this.shaka.load(uri, startMs ? startMs / 1000 : null, 'application/dash+xml');
@@ -244,7 +261,7 @@ export class Player {
         ? 'Dieses Videoformat kann nicht abgespielt werden.'
         : `Wiedergabefehler (${code ?? 'unbekannt'})`;
     this.status = 'error';
-    window.gx.failed({ token: this.token, positionMs: this.positionMs, message, http });
+    window.gx.failed({ token: this.token, positionMs: this.positionMs, message, http, detail: errorDetail(err) });
   }
 
   // ---------------------------------------------------------------- SponsorBlock

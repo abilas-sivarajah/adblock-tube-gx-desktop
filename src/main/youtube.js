@@ -516,10 +516,10 @@ export function preferredClients(exclude = []) {
 
 /** Wie viele Clients bleiben für dieses Video noch übrig (angemeldet auch die mit Konto)? */
 export function clientsLeft(exclude = []) {
-  const anonymous = STREAM_CLIENTS.filter((c) => !exclude.includes(c)).length + (sabrExcluded(exclude) ? 0 : 1);
+  const anonymous = STREAM_CLIENTS.filter((c) => !exclude.includes(c)).length + sabrNames(exclude).length;
   const method = accountMethod();
   const names = method === 'device' ? DEVICE_CLIENTS : method ? ACCOUNT_CLIENTS : [];
-  const account = method ? names.filter((c) => !exclude.includes(ACCOUNT_PREFIX + c)).length + (sabrExcluded(exclude, ACCOUNT_PREFIX) ? 0 : 1) : 0;
+  const account = method ? names.filter((c) => !exclude.includes(ACCOUNT_PREFIX + c)).length + sabrNames(exclude, ACCOUNT_PREFIX).length : 0;
   return anonymous + account;
 }
 
@@ -644,7 +644,8 @@ async function tryClients(id, group, ctx) {
 // Bei den Web-Clients liefert YouTube darüber auch dann HD, wenn es direkte Adressen nur noch für 360p gibt.
 export const SABR_CLIENTS = process.env.GXTUBE_SABR_CLIENTS ? process.env.GXTUBE_SABR_CLIENTS.split(',') : ['WEB', 'MWEB'];
 // Mit Konto: Der TV-Client kommt auch durch, wenn das Netz anonym als "Bot" gesperrt ist – liefert aber nur SABR
-export const ACCOUNT_SABR_CLIENTS = ['TV'];
+// (WEB als zweiter Weg, falls SABR über TV bei einem Video im Player scheitert)
+export const ACCOUNT_SABR_CLIENTS = ['TV', 'WEB'];
 const SABR_PREFIX = 'SABR ';
 // Lief zuletzt nur SABR in voller Qualität: eine Weile gleich SABR nehmen (spart die vielen Versuche)
 const SABR_FIRST_MS = 60 * 60 * 1000;
@@ -653,7 +654,13 @@ let sabrFirstAccount = false;
 
 /** SABR für diese Gruppe ('' = anonym, 'Konto ') schon gescheitert oder abgeschaltet? */
 function sabrExcluded(exclude, prefix = '') {
-  return process.env.GXTUBE_NO_SABR === '1' || exclude.some((c) => c.startsWith(prefix + SABR_PREFIX));
+  return sabrNames(exclude, prefix).length === 0;
+}
+
+/** SABR-Clients, die für dieses Video noch nicht gescheitert sind. */
+function sabrNames(exclude, prefix = '') {
+  if (process.env.GXTUBE_NO_SABR === '1') return [];
+  return (prefix ? ACCOUNT_SABR_CLIENTS : SABR_CLIENTS).filter((n) => !exclude.includes(prefix + SABR_PREFIX + n));
 }
 
 function clientInfoFor(clientName, yt) {
@@ -744,15 +751,30 @@ async function trySabr(id, group, ctx, names = SABR_CLIENTS) {
 }
 
 /** YouTube verlangt neue SABR-Adressen (z. B. nach langer Pause). */
-export async function sabrReload(id, label) {
+export async function sabrReload(id, label, reloadPlaybackContext = null) {
   if (!VIDEO_ID.test(id)) throw new Error('Ungültige Video-ID');
   const withAccount = String(label).startsWith(ACCOUNT_PREFIX);
   const clientName = String(label).replace(ACCOUNT_PREFIX, '').replace(SABR_PREFIX, '');
   if (!(withAccount ? ACCOUNT_SABR_CLIENTS : SABR_CLIENTS).includes(clientName)) throw new Error('Kein SABR-Client');
-  const yt = withAccount ? (await accountClient()).yt : await client();
-  const po = await poTokensFor(yt, clientName, id, yt.session.context.client.visitorData);
-  const { url, ustreamerConfig } = await sabrData(yt, id, clientName, po);
-  return { url, ustreamerConfig };
+  const acc = withAccount ? await accountClient() : null;
+  const yt = acc?.yt ?? (await client());
+  const po = await poTokensFor(yt, clientName, id, withAccount ? acc.dataSyncId : yt.session.context.client.visitorData);
+  // Wie der Webplayer: den Kontext, den YouTube mit der Reload-Aufforderung schickt, wieder mitgeben
+  const res = await yt.actions.execute('/player', {
+    videoId: id,
+    client: clientName,
+    contentCheckOk: true,
+    racyCheckOk: true,
+    playbackContext: {
+      contentPlaybackContext: { vis: 0, splay: false, signatureTimestamp: yt.session.player?.signature_timestamp },
+      ...(reloadPlaybackContext ? { reloadPlaybackContext } : {}),
+    },
+    ...(po?.content ? { serviceIntegrityDimensions: { poToken: po.content } } : {}),
+  });
+  const raw = res.data?.streamingData?.serverAbrStreamingUrl;
+  const ustreamerConfig = res.data?.playerConfig?.mediaCommonConfig?.mediaUstreamerRequestConfig?.videoPlaybackUstreamerConfig;
+  if (!raw || !ustreamerConfig) throw new Error('YouTube hat keine neuen SABR-Daten geschickt');
+  return { url: await yt.session.player.decipher(raw), ustreamerConfig };
 }
 
 /** PO-Token für SABR-Anfragen (an die Video-ID gebunden). */
@@ -774,9 +796,10 @@ export async function mintPoToken(binding) {
  * Mit Google-Konto: Scheitert es anonym (Bot-Sperre, Altersgrenze …), geht es mit Konto
  * weiter – und nach einer Sperre für eine Weile gleich mit Konto.
  */
-export async function stream(id, { maxHeight = 1080, exclude = [], clients = preferredClients(exclude), check = true } = {}) {
+export async function stream(id, { maxHeight = 1080, exclude = [], clients = preferredClients(exclude), check = true, notes = [] } = {}) {
   if (!VIDEO_ID.test(id)) throw new Error('Ungültige Video-ID');
-  const ctx = { reasons: [], candidates: [], trail: [], maxHeight, check, fetchImpl: options.fetch ?? globalThis.fetch };
+  // [notes]: was bei diesem Video schon im Player gescheitert ist (steht mit in den Details)
+  const ctx = { reasons: [...notes], candidates: [], trail: [...notes], maxHeight, check, fetchImpl: options.fetch ?? globalThis.fetch };
   const withAccount = Boolean(options.account?.loggedIn());
 
   const anonymous = async () => {
@@ -798,8 +821,8 @@ export async function stream(id, { maxHeight = 1080, exclude = [], clients = pre
   };
 
   // SABR anonym bzw. mit Konto (TV)
-  const sabrAnonymous = async () => trySabr(id, await anonymous(), ctx);
-  const sabrAccount = async () => trySabr(id, await account(), ctx, ACCOUNT_SABR_CLIENTS);
+  const sabrAnonymous = async () => trySabr(id, await anonymous(), ctx, sabrNames(exclude));
+  const sabrAccount = async () => trySabr(id, await account(), ctx, sabrNames(exclude, ACCOUNT_PREFIX));
   const sabrAllowed = (useAccount) => (useAccount ? withAccount && !sabrExcluded(exclude, ACCOUNT_PREFIX) : !sabrExcluded(exclude));
 
   // Zuletzt ging nur SABR (oder Test): gleich über SABR
@@ -854,7 +877,7 @@ export async function stream(id, { maxHeight = 1080, exclude = [], clients = pre
   if (setupError && !ctx.reasons.length) throw setupError;
 
   const reasons = ctx.reasons;
-  const tried = reasons.filter((r) => !r.startsWith('Konto: '));
+  const tried = reasons.filter((r) => !r.startsWith('Konto: ') && !notes.includes(r));
   // "Bot" nur melden, wenn wirklich alle Versuche daran scheiterten
   const bot = tried.length > 0 && tried.every((r) => BOT_REASON.test(r));
   const age = tried.some((r) => AGE_REASON.test(r));
@@ -876,6 +899,9 @@ export async function stream(id, { maxHeight = 1080, exclude = [], clients = pre
   } else if (blocked) {
     message = 'YouTube hat die Streams für dieses Video abgelehnt.';
     signIn = !withAccount;
+  } else if (notes.length) {
+    // Ein Weg lief schon an und ist im Player gescheitert – das ist der eigentliche Grund
+    message = 'Video konnte nicht abgespielt werden: ' + strip(notes.at(-1)).replace(/^SABR [A-Z_]+: /, '');
   } else {
     message = 'Video konnte nicht geladen werden: ' + (strip(tried.find((r) => !BOT_REASON.test(r))) || strip(reasons[0]) || 'unbekannter Fehler');
   }
@@ -1094,13 +1120,41 @@ export function parseFeed(xml, channelInfo = {}) {
   return out;
 }
 
-async function channelFeed(c) {
-  const cached = feedCache.get(c.id);
-  if (cached && Date.now() - cached.at < FEED_TTL_MS) return cached.videos;
+/** Ungefährer Zeitpunkt aus "vor 3 Tagen" / "3 days ago" (für die Sortierung). */
+export function approxPublished(textValue, now = Date.now()) {
+  const units = { sekunde: 1e3, second: 1e3, minute: 6e4, stunde: 36e5, hour: 36e5, tag: 864e5, day: 864e5, woche: 6048e5, week: 6048e5, monat: 2592e6, month: 2592e6, jahr: 31536e6, year: 31536e6 };
+  const m = String(textValue ?? '').toLowerCase().match(/(\d+)\s*(sekunde|second|minute|stunde|hour|tag|day|woche|week|monat|month|jahr|year)/);
+  return m ? now - Number(m[1]) * units[m[2]] : 0;
+}
+
+// YouTube schaltet die RSS-Feeds zeitweise ab (404) – dann eine Weile gleich die Kanalseite nehmen
+let rssFailures = 0;
+let rssOffUntil = 0;
+
+async function rssFeed(c) {
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const res = await fetchImpl(`https://www.youtube.com/feeds/videos.xml?channel_id=${c.id}`);
   if (!res.ok) throw new Error(`Feed ${res.status}`);
-  const videos = parseFeed(await res.text(), c);
+  return parseFeed(await res.text(), c);
+}
+
+async function channelFeed(c) {
+  const cached = feedCache.get(c.id);
+  if (cached && Date.now() - cached.at < FEED_TTL_MS) return cached.videos;
+  let videos = null;
+  if (Date.now() > rssOffUntil) {
+    try {
+      videos = await rssFeed(c);
+      rssFailures = 0;
+    } catch {
+      if (++rssFailures >= 3) rssOffUntil = Date.now() + 60 * 60 * 1000;
+    }
+  }
+  if (!videos) {
+    // Ersatz: erste Seite der Kanalvideos
+    const page = await channel(c.id);
+    videos = page.items.map((v) => ({ ...v, publishedAt: approxPublished(v.publishedText) }));
+  }
   feedCache.set(c.id, { at: Date.now(), videos });
   return videos;
 }

@@ -118,6 +118,14 @@ export function parseCommand(raw) {
       return { type, value: num(msg.value, 0.25, 3, 1) };
     case 'autoplay':
       return { type, enabled: msg.enabled === true };
+    case 'fullscreen':
+      // ohne "on": umschalten
+      return { type, on: typeof msg.on === 'boolean' ? msg.on : null };
+    case 'display': {
+      const id = typeof msg.id === 'number' && Number.isSafeInteger(msg.id) ? msg.id : null;
+      if (id === null) throw new ProtocolError('Bildschirm fehlt');
+      return { type, id };
+    }
     case 'pause':
     case 'resume':
     case 'toggle':

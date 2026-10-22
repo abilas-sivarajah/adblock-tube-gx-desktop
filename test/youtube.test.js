@@ -64,13 +64,15 @@ test('Mit Google-Konto gibt es weitere Clients zum Ausweichen', async () => {
   const yt = await import('../src/main/youtube.js');
   let loggedIn = false;
   yt.configure({ account: { loggedIn: () => loggedIn, cookieHeader: async () => null, fetch: globalThis.fetch } });
-  const all = [...yt.STREAM_CLIENTS, 'SABR WEB'];
-  assert.equal(yt.clientsLeft(yt.STREAM_CLIENTS), 1, 'SABR bleibt als Ausweg');
+  const all = [...yt.STREAM_CLIENTS, ...yt.SABR_CLIENTS.map((c) => 'SABR ' + c)];
+  assert.equal(yt.clientsLeft(yt.STREAM_CLIENTS), yt.SABR_CLIENTS.length, 'SABR bleibt als Ausweg');
   assert.equal(yt.clientsLeft(all), 0);
   loggedIn = true;
-  assert.equal(yt.clientsLeft(all), yt.ACCOUNT_CLIENTS.length + 1, 'Konto-Clients und SABR mit Konto');
-  assert.equal(yt.clientsLeft([...all, ...yt.ACCOUNT_CLIENTS.map((c) => 'Konto ' + c)]), 1);
-  assert.equal(yt.clientsLeft([...all, ...yt.ACCOUNT_CLIENTS.map((c) => 'Konto ' + c), 'Konto SABR TV']), 0);
+  const sabr = yt.ACCOUNT_SABR_CLIENTS.map((c) => 'Konto SABR ' + c);
+  assert.equal(yt.clientsLeft(all), yt.ACCOUNT_CLIENTS.length + sabr.length, 'Konto-Clients und SABR mit Konto');
+  assert.equal(yt.clientsLeft([...all, ...yt.ACCOUNT_CLIENTS.map((c) => 'Konto ' + c)]), sabr.length);
+  assert.equal(yt.clientsLeft([...all, ...yt.ACCOUNT_CLIENTS.map((c) => 'Konto ' + c), sabr[0]]), sabr.length - 1, 'scheitert SABR über TV, bleibt WEB');
+  assert.equal(yt.clientsLeft([...all, ...yt.ACCOUNT_CLIENTS.map((c) => 'Konto ' + c), ...sabr]), 0);
   yt.configure({ account: null });
 });
 
@@ -137,4 +139,13 @@ test('Immer der Originalton: Original-Spur wird erkannt', async () => {
   // Nur eine Spur: nichts aussortieren
   assert.equal(originalAudioTrack([a('de.4', { orig: true }), a('de.4', { orig: true })]), null);
   assert.equal(originalAudioTrack([{ has_audio: true, has_video: false }]), null);
+});
+
+test('Ungefähres Datum aus "vor 3 Tagen" für den Abo-Feed', async () => {
+  const { approxPublished } = await import('../src/main/youtube.js');
+  const now = Date.parse('2026-10-22T12:00:00Z');
+  assert.equal(approxPublished('vor 3 Tagen', now), now - 3 * 864e5);
+  assert.equal(approxPublished('Gestreamt vor 2 Stunden', now), now - 2 * 36e5);
+  assert.equal(approxPublished('1 year ago', now), now - 31536e6);
+  assert.equal(approxPublished('', now), 0);
 });

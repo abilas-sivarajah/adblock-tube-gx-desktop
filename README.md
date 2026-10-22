@@ -55,7 +55,7 @@ gibt nur niedrige Qualität frei oder ein Video ist altersbeschränkt. Dafür gi
 
 | | |
 |---|---|
-| **Vom Handy steuern** | Abspielen, Pause, Springen, Weiter/Zurück, Lautstärke (auch mit den Lautstärketasten des Handys), Geschwindigkeit, Warteschlange („Als Nächstes“, „Zur Warteschlange hinzufügen“), mehrere Handys gleichzeitig |
+| **Vom Handy steuern** | Abspielen, Pause, Springen, Weiter/Zurück, Lautstärke (auch mit den Lautstärketasten des Handys), Geschwindigkeit, Warteschlange („Als Nächstes“, „Zur Warteschlange hinzufügen“), **Vollbild** und **Bildschirm wählen** (bei mehreren Monitoren), mehrere Handys gleichzeitig |
 | **Automatisch finden** | Der PC meldet sich im WLAN; kein Code, kein Konto nötig |
 | **Keine Werbung** | Keine Videowerbung, keine Banner |
 | **SponsorBlock** | Gesponserte Abschnitte werden übersprungen (grün auf dem Fortschrittsbalken), Kategorien einstellbar |
