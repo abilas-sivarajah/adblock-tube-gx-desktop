@@ -32,6 +32,8 @@ contextBridge.exposeInMainWorld('gx', {
   report: (state) => ipcRenderer.send('player:report', state),
   ended: (token) => ipcRenderer.send('player:ended', token),
   failed: (info) => ipcRenderer.send('player:failed', info),
+  mintPoToken: (binding) => ipcRenderer.invoke('potoken:mint', binding),
+  sabrReload: (id, client) => ipcRenderer.invoke('yt:sabrReload', id, client),
 
   setFullscreen: (on) => ipcRenderer.send('window:fullscreen', on),
   isFullscreen: () => ipcRenderer.invoke('window:isFullscreen'),

@@ -90,8 +90,8 @@ gibt nur niedrige Qualität frei oder ein Video ist altersbeschränkt. Dafür gi
 - Wenn YouTube zu viele Anfragen aus deinem Netz sieht, verlangt es eine Bot-Bestätigung. Dann hilft
   **mit Google anmelden** oder warten. Unter der Fehlermeldung steht, was jeder YouTube-Client geantwortet hat.
 - Lehnt Google die Anmeldung im Fenster ab („Browser nicht sicher“), meldet GX Tube das – dann mit dem Handy anmelden.
-- Sperrt YouTube die höheren Qualitäten, fragt GX Tube noch einen weiteren Client und nimmt sonst die beste
-  freigegebene Qualität (notfalls die 360p-Datei). Der Qualitäts-Knopf zeigt immer die echte Auflösung, das
+- Sperrt YouTube die höheren Qualitäten, fragt GX Tube die anderen Clients, lädt dann wie der YouTube-Webplayer
+  über SABR und nimmt erst zuletzt die beste freigegebene Qualität (notfalls die 360p-Datei). Der Qualitäts-Knopf zeigt immer die echte Auflösung, das
   Qualitäts-Menü sagt dann „Höhere Qualität sperrt YouTube gerade“ – mit Google angemeldet geht es meist wieder in HD.
 
 ## 🛠️ Selbst bauen
@@ -119,6 +119,7 @@ BLOCK_CLIENT=IOS npm run debug:play -- dQw4w9WgXcQ 60   # simuliert eine YouTube
 |---|---|
 | Programm | Electron, Oberfläche in reinem HTML/CSS/JS (ohne Framework) |
 | YouTube-Daten | YouTube.js (InnerTube): Suche, Vorschläge, Details, ähnliche Videos. Streams über mehrere YouTube-Clients (Mobile Web, iOS, TV …): Vor dem Abspielen wird die gewählte Qualität mitten in der Datei geprüft; lehnt YouTube während der Wiedergabe ab, geht es an derselben Stelle mit dem nächsten Client weiter |
+| SABR | Wie der YouTube-Webplayer: Stücke per POST im UMP-Format holen ([googlevideo](https://github.com/LuanRT/googlevideo), Shaka-Anbindung nach dessen Beispiel) – der Ausweg, wenn YouTube direkte Adressen nur noch für 360p herausgibt |
 | PO-Token | Wie im Browser: YouTubes BotGuard läuft in einem unsichtbaren Fenster ([BgUtils](https://github.com/LuanRT/BgUtils)), damit bekommt Mobile Web gültige „Proof of Origin“-Tokens |
 | Google-Konto | Per Code: OAuth-Geräteanmeldung von YouTube auf dem Fernseher (google.com/device), Tokens mit Electron `safeStorage` verschlüsselt, geladen wird über die TV-Clients. Im Fenster: eigenes Chromium-Profil (`persist:gx-google`), Anfragen mit Konto laufen über dieses Profil (erneuerte Cookies bleiben gespeichert), geladen über TV und Mobile Web (PO-Token an die DataSync-ID gebunden) |
 | Player | Shaka Player: Video- und Tonspur getrennt als DASH, Live-Streams als HLS |
@@ -139,7 +140,7 @@ src/
 │   ├── store.js             # Einstellungen, Verlauf (JSON im Benutzerordner)
 │   └── updater.js           # automatische Updates (GitHub-Releases)
 ├── preload/preload.cjs      # sichere Brücke zum Fenster
-└── renderer/                # Fenster: Startseite, Suche, Player, Einstellungen
+└── renderer/                # Fenster: Startseite, Suche, Player (sabr.js: SABR für Shaka), Einstellungen
 test/                        # Unit-Tests (node --test)
 test-e2e/smoke.mjs           # startet die echte App und steuert sie wie das Handy
 test-e2e/account-test.mjs    # Code fürs Handy, Anmeldefenster, Laden mit Konto, Abmelden

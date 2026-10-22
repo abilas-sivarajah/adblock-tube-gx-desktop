@@ -1,7 +1,8 @@
 // Alle YouTube-Abfragen über YouTube.js (InnerTube) – ohne Werbedaten.
 // Läuft im Hauptprozess; der Player im Fenster bekommt nur fertige Manifeste.
 
-import { Innertube, Platform, UniversalCache, Log, YTNodes } from 'youtubei.js';
+import { Innertube, Platform, UniversalCache, Log, YTNodes, Constants } from 'youtubei.js';
+import { buildSabrFormat } from 'googlevideo/utils';
 
 Log.setLevel(Log.Level.NONE);
 
@@ -455,6 +456,7 @@ export function bestCandidate(candidates) {
 
 export function reportClientFailure(clientName) {
   if (clientName) clientFailures.set(clientName, Date.now());
+  if (String(clientName).startsWith(SABR_PREFIX)) sabrFirstUntil = 0;
 }
 
 export function preferredClients(exclude = []) {
@@ -466,7 +468,7 @@ export function preferredClients(exclude = []) {
 
 /** Wie viele Clients bleiben für dieses Video noch übrig (angemeldet auch die mit Konto)? */
 export function clientsLeft(exclude = []) {
-  const anonymous = STREAM_CLIENTS.filter((c) => !exclude.includes(c)).length;
+  const anonymous = STREAM_CLIENTS.filter((c) => !exclude.includes(c)).length + (sabrExcluded(exclude) ? 0 : 1);
   const method = accountMethod();
   const names = method === 'device' ? DEVICE_CLIENTS : method ? ACCOUNT_CLIENTS : [];
   const account = names.filter((c) => !exclude.includes(ACCOUNT_PREFIX + c)).length;
@@ -495,7 +497,10 @@ async function tryClients(id, group, ctx) {
         // Privat / gelöscht: andere Clients ändern daran nichts
         if (status?.status === 'ERROR') return null;
         // Bot-Sperre gilt fürs ganze Netz – nicht alle Clients durchprobieren (das macht es nur schlimmer)
-        if (BOT_REASON.test(reason) && ++botBlocks >= 2) return null;
+        if (BOT_REASON.test(reason) && ++botBlocks >= 2) {
+          ctx.botStop = true;
+          return null;
+        }
         continue;
       }
       const sd = info.streaming_data;
@@ -582,6 +587,118 @@ async function tryClients(id, group, ctx) {
   return null;
 }
 
+// ------------------------------------------------------------------ SABR
+
+// SABR: So lädt der YouTube-Webplayer – der Player fragt Stück für Stück per POST (siehe renderer/sabr.js).
+// Bei den Web-Clients liefert YouTube darüber auch dann HD, wenn es direkte Adressen nur noch für 360p gibt.
+export const SABR_CLIENTS = ['WEB', 'MWEB'];
+const SABR_PREFIX = 'SABR ';
+// Lief zuletzt nur SABR in voller Qualität: eine Weile gleich SABR nehmen (spart die vielen Versuche)
+const SABR_FIRST_MS = 60 * 60 * 1000;
+let sabrFirstUntil = 0;
+
+function sabrExcluded(exclude) {
+  return process.env.GXTUBE_NO_SABR === '1' || exclude.some((c) => c.startsWith(SABR_PREFIX));
+}
+
+function clientInfoFor(clientName, yt) {
+  const c = Constants.CLIENTS[clientName];
+  return {
+    clientName: Number(Constants.CLIENT_NAME_IDS[c.NAME]),
+    clientVersion: c.VERSION,
+    osName: yt.session.context.client.osName,
+    osVersion: yt.session.context.client.osVersion,
+  };
+}
+
+async function sabrData(yt, id, clientName, po) {
+  const info = await yt.getBasicInfo(id, { client: clientName, po_token: po?.content });
+  const sd = info.streaming_data;
+  const ustreamerConfig = info.player_config?.media_common_config?.media_ustreamer_request_config?.video_playback_ustreamer_config;
+  const url = sd?.server_abr_streaming_url ? await yt.session.player.decipher(sd.server_abr_streaming_url) : null;
+  return { info, sd, ustreamerConfig, url };
+}
+
+/** Stream über SABR mit einem Web-Client (mit PO-Token) – ohne Vorab-Prüfung, scheitert es, kommt die Notlösung. */
+async function trySabr(id, group, ctx) {
+  const { yt } = group;
+  for (const clientName of SABR_CLIENTS) {
+    const label = SABR_PREFIX + clientName;
+    try {
+      const po = await poTokensFor(yt, clientName, id, group.binding);
+      const { info, sd, ustreamerConfig, url } = await sabrData(yt, id, clientName, po);
+      const status = info.playability_status;
+      if (status?.status !== 'OK') {
+        const reason = status?.reason || status?.status || 'nicht abspielbar';
+        failed(ctx, `${label}: ${reason}`);
+        // Gelöscht/privat oder Bot-Sperre: der andere Web-Client ändert daran nichts
+        if (status?.status === 'ERROR' || BOT_REASON.test(reason)) return null;
+        continue;
+      }
+      const b = info.basic_info;
+      if (b.is_live || b.is_post_live_dvr) return null;
+      if (!url || !ustreamerConfig || !sd?.adaptive_formats?.length) {
+        failed(ctx, `${label}: kein SABR`);
+        continue;
+      }
+      // Nur MP4-Spuren (H.264/AV1, AAC): Bei WebM steckt der Index (Cues) nicht im Anfangsstück, das SABR liefert
+      const mp4 = (f) => /^(video|audio)\/mp4/.test(String(f.mime_type));
+      const heights = sd.adaptive_formats.filter((f) => f.has_video && mp4(f)).map((f) => f.height || 0);
+      if (!heights.length || !sd.adaptive_formats.some((f) => f.has_audio && mp4(f))) {
+        failed(ctx, `${label}: keine MP4-Spuren`);
+        continue;
+      }
+      const maxHeight = Math.max(0, ...heights.filter((h) => h <= ctx.maxHeight)) || Math.min(...heights);
+      const manifest = await info.toDash({ manifest_options: { is_sabr: true }, format_filter: (f) => !mp4(f) });
+      ctx.trail.push(`${label}: bis ${maxHeight}p${po ? ' (mit PO-Token)' : ''}`);
+      return {
+        id,
+        title: b.title ?? '',
+        channelName: b.author ?? '',
+        thumbnail: bestThumb(b.thumbnail, id),
+        durationSec: b.duration ?? -1,
+        isLive: false,
+        client: label,
+        account: false,
+        kind: 'sabr',
+        manifest,
+        maxHeight,
+        poToken: Boolean(po),
+        degraded: false,
+        note: 'SABR wie im Browser',
+        sabr: {
+          url,
+          ustreamerConfig,
+          formats: sd.adaptive_formats.map((f) => buildSabrFormat(f)),
+          clientInfo: clientInfoFor(clientName, yt),
+          poToken: po?.content ?? null,
+        },
+      };
+    } catch (e) {
+      failed(ctx, `${label}: ${e?.message?.split('\n')[0] || e}`);
+    }
+  }
+  return null;
+}
+
+/** YouTube verlangt neue SABR-Adressen (z. B. nach langer Pause). */
+export async function sabrReload(id, label) {
+  if (!VIDEO_ID.test(id)) throw new Error('Ungültige Video-ID');
+  const clientName = String(label).replace(SABR_PREFIX, '');
+  if (!SABR_CLIENTS.includes(clientName)) throw new Error('Kein SABR-Client');
+  const yt = await client();
+  const po = await poTokensFor(yt, clientName, id, yt.session.context.client.visitorData);
+  const { url, ustreamerConfig } = await sabrData(yt, id, clientName, po);
+  return { url, ustreamerConfig };
+}
+
+/** PO-Token für SABR-Anfragen (an die Video-ID gebunden). */
+export async function mintPoToken(binding) {
+  const provider = options.poTokens;
+  if (!provider?.available()) return '';
+  return provider.mint(String(binding)).catch(() => '');
+}
+
 /**
  * Sucht einen YouTube-Client, dessen Stream-Adressen wirklich abspielbar sind,
  * und baut daraus ein DASH-Manifest (getrennte Video- und Tonspur) bzw. nimmt
@@ -617,6 +734,12 @@ export async function stream(id, { maxHeight = 1080, exclude = [], clients = pre
     return { ...result, attempts: ctx.trail, signIn: Boolean(result.degraded && !withAccount) };
   };
 
+  // Zuletzt ging nur SABR (oder Test): gleich über SABR
+  if ((process.env.GXTUBE_FORCE_SABR === '1' || Date.now() < sabrFirstUntil) && !sabrExcluded(exclude)) {
+    const sabr = await trySabr(id, await anonymous(), ctx).catch(() => null);
+    if (sabr) return chosen(sabr);
+  }
+
   let setupError = null;
   let accountExpired = false;
   for (const group of order) {
@@ -634,6 +757,19 @@ export async function stream(id, { maxHeight = 1080, exclude = [], clients = pre
     }
     const result = await tryClients(id, g, ctx);
     if (result) return chosen(result);
+  }
+  // Keiner in voller Qualität mit direkten Adressen: wie der YouTube-Webplayer über SABR
+  // (nicht bei einer Bot-Sperre – das wären nur weitere Anfragen, die die Sperre verlängern)
+  if (!sabrExcluded(exclude) && !(ctx.botStop && !ctx.candidates.length)) {
+    try {
+      const sabr = await trySabr(id, await anonymous(), ctx);
+      if (sabr) {
+        sabrFirstUntil = Date.now() + SABR_FIRST_MS;
+        return chosen(sabr);
+      }
+    } catch (e) {
+      failed(ctx, `SABR: ${e?.message ?? e}`);
+    }
   }
   // Keiner in voller Qualität: die beste Notlösung nehmen
   const fallback = bestCandidate(ctx.candidates);

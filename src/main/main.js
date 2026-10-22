@@ -670,6 +670,8 @@ function setupIpc() {
   ipcMain.on('window:fullscreen', (_e, on) => win?.setFullScreen(Boolean(on)));
   ipcMain.handle('window:isFullscreen', () => Boolean(win?.isFullScreen()));
   ipcMain.on('clients:kick', (_e, id) => server?.kick(Number(id)));
+  ipcMain.handle('potoken:mint', (_e, binding) => YT.mintPoToken(String(binding)));
+  ipcMain.handle('yt:sabrReload', (_e, id, client) => YT.sabrReload(String(id), String(client)));
   ipcMain.handle('account:status', () => Account.status());
   ipcMain.handle('account:login', () => login());
   ipcMain.handle('account:logout', () => logout());

@@ -30,12 +30,14 @@
   "dependencies": {
     "bgutils-js": "4.0.3",
     "electron-updater": "6.8.9",
+    "googlevideo": "5.0.0",
     "ws": "8.22.0",
     "youtubei.js": "18.2.0"
   },
   "devDependencies": {
     "electron": "44.4.5",
     "electron-builder": "26.16.1",
+    "esbuild": "0.28.2",
     "playwright-core": "1.63.0",
     "shaka-player": "5.2.12"
   }

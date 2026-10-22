@@ -3,6 +3,8 @@
 
 /* global shaka */
 
+import { attachSabr } from './sabr.js';
+
 const REPORT_EVERY_MS = 1000;
 const SAVE_EVERY_MS = 10000;
 
@@ -23,6 +25,17 @@ export class Player {
     this.lastSave = 0;
     this.loadSeq = 0;
     this.shaka = null;
+    this.sabr = null; // SABR-Adapter des aktuellen Videos (nur bei kind 'sabr')
+  }
+
+  #dropSabr() {
+    if (!this.sabr) return;
+    try {
+      this.sabr.dispose();
+    } catch {
+      // egal
+    }
+    this.sabr = null;
   }
 
   async init({ volume = 100, speed = 1 } = {}) {
@@ -153,6 +166,7 @@ export class Player {
     this.onStatus('loading');
     const seq = ++this.loadSeq;
     await this.shaka.unload().catch(() => {});
+    this.#dropSabr();
     return seq === this.loadSeq;
   }
 
@@ -165,8 +179,17 @@ export class Player {
     this.maxQuality = maxQuality || 1080;
     this.#configure();
     const speed = this.video.playbackRate;
+    this.#dropSabr();
     try {
-      if (stream.kind === 'dash') {
+      if (stream.kind === 'sabr') {
+        // Wie der YouTube-Webplayer: Stücke per SABR holen (siehe sabr.js)
+        this.sabr = attachSabr(this.shaka, stream.sabr, {
+          mintPoToken: () => window.gx.mintPoToken(stream.id),
+          reload: () => window.gx.sabrReload(stream.id, stream.client),
+        });
+        const uri = 'data:application/dash+xml;base64,' + btoa(unescape(encodeURIComponent(stream.manifest)));
+        await this.shaka.load(uri, startMs ? startMs / 1000 : null, 'application/dash+xml');
+      } else if (stream.kind === 'dash') {
         const uri = 'data:application/dash+xml;base64,' + btoa(unescape(encodeURIComponent(stream.manifest)));
         await this.shaka.load(uri, startMs ? startMs / 1000 : null, 'application/dash+xml');
       } else if (stream.kind === 'progressive') {
@@ -193,6 +216,7 @@ export class Player {
     this.status = 'idle';
     this.onStatus('idle');
     await this.shaka.unload().catch(() => {});
+    this.#dropSabr();
   }
 
   #onShakaError(err) {

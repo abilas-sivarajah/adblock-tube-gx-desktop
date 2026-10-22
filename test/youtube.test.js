@@ -64,7 +64,8 @@ test('Mit Google-Konto gibt es weitere Clients zum Ausweichen', async () => {
   const yt = await import('../src/main/youtube.js');
   let loggedIn = false;
   yt.configure({ account: { loggedIn: () => loggedIn, cookieHeader: async () => null, fetch: globalThis.fetch } });
-  const all = yt.STREAM_CLIENTS;
+  const all = [...yt.STREAM_CLIENTS, 'SABR WEB'];
+  assert.equal(yt.clientsLeft(yt.STREAM_CLIENTS), 1, 'SABR bleibt als Ausweg');
   assert.equal(yt.clientsLeft(all), 0);
   loggedIn = true;
   assert.equal(yt.clientsLeft(all), yt.ACCOUNT_CLIENTS.length);
