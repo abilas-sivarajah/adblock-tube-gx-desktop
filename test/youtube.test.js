@@ -126,3 +126,15 @@ test('Abo-Feed (RSS) wird gelesen, Shorts erkannt', async () => {
   assert.equal(list[1].channelId, 'UCuAXFkgsw1L7xaCfnd5JJOw');
   assert.ok(list[0].publishedAt > list[1].publishedAt);
 });
+
+test('Immer der Originalton: Original-Spur wird erkannt', async () => {
+  const { originalAudioTrack } = await import('../src/main/youtube.js');
+  const a = (id, extra = {}) => ({ has_audio: true, has_video: false, audio_track: { id, display_name: extra.name ?? id, audio_is_default: Boolean(extra.def) }, is_original: extra.orig ?? false, is_dubbed: extra.dub ?? false, is_auto_dubbed: extra.auto ?? false });
+  // Markiert: Deutsch ist Original, Englisch KI-synchronisiert und Standard
+  assert.equal(originalAudioTrack([a('en.3', { auto: true, def: true }), a('de.4', { orig: true })]), 'de.4');
+  // Keine Markierung (alle "original"), aber der Name verrät es
+  assert.equal(originalAudioTrack([a('en.3', { orig: true, def: true, name: 'Englisch' }), a('de.4', { orig: true, name: 'Deutsch (original)' })]), 'de.4');
+  // Nur eine Spur: nichts aussortieren
+  assert.equal(originalAudioTrack([a('de.4', { orig: true }), a('de.4', { orig: true })]), null);
+  assert.equal(originalAudioTrack([{ has_audio: true, has_video: false }]), null);
+});

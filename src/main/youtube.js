@@ -456,6 +456,32 @@ function rememberGood(prefix, client) {
   lastGood.set(prefix, { client, at: Date.now() });
 }
 
+/**
+ * Original-Tonspur eines Videos mit mehreren Tonspuren (Synchronfassungen, KI-Übersetzungen).
+ * Gibt die Spur-ID zurück, oder null, wenn es nur eine gibt.
+ * YouTube markiert die Spuren (acont=original/dubbed/dubbed-auto); fehlt die Markierung, hilft
+ * der Name ("… original") und zuletzt die Standard-Spur.
+ */
+export function originalAudioTrack(formats) {
+  const audios = (formats ?? []).filter((f) => f.has_audio && !f.has_video && f.audio_track?.id);
+  const ids = new Set(audios.map((f) => f.audio_track.id));
+  if (ids.size <= 1) return null;
+  const marked = new Set(audios.filter((f) => f.is_original && !f.is_drc).map((f) => f.audio_track.id));
+  const dubsMarked = audios.some((f) => f.is_dubbed || f.is_auto_dubbed || f.is_secondary || f.is_descriptive);
+  if (dubsMarked && marked.size === 1) return [...marked][0];
+  const named = audios.find((f) => /original/i.test(f.audio_track.display_name ?? ''));
+  if (named) return named.audio_track.id;
+  if (marked.size === 1) return [...marked][0];
+  return audios.find((f) => f.audio_track.audio_is_default)?.audio_track.id ?? null;
+}
+
+/** true für Tonspuren, die nicht das Original sind (zum Aussortieren). */
+function notOriginalAudio(formats) {
+  const original = originalAudioTrack(formats);
+  if (!original) return () => false;
+  return (f) => f.has_audio && !f.has_video && Boolean(f.audio_track?.id) && f.audio_track.id !== original;
+}
+
 /** Fehlertext kurz und verständlich (YouTube.js schreibt "Request to … failed with status code 400"). */
 function shortError(e) {
   const msg = String(e?.message ?? e).split('\n')[0];
@@ -545,7 +571,9 @@ async function tryClients(id, group, ctx) {
       }
       const formats = sd?.adaptive_formats ?? [];
       const videos = formats.filter((f) => f.has_video && !f.has_audio);
-      const audio = formats.filter((f) => f.has_audio && !f.has_video).sort((a, c) => (c.bitrate || 0) - (a.bitrate || 0))[0];
+      // Immer der Originalton – Synchronfassungen fliegen raus
+      const dubbed = notOriginalAudio(formats);
+      const audio = formats.filter((f) => f.has_audio && !f.has_video && !dubbed(f)).sort((a, c) => (c.bitrate || 0) - (a.bitrate || 0))[0];
       // Video mit Ton in einer Datei (meist 360p) – liefert YouTube fast immer
       const muxed = (sd?.formats ?? []).filter((f) => f.has_video && f.has_audio).sort((a, c) => (c.height || 0) - (a.height || 0))[0];
       const middle = (f) => (Number(f.content_length) || 0) * 0.5;
@@ -572,7 +600,7 @@ async function tryClients(id, group, ctx) {
         const cap = video.height;
         const manifest = await info.toDash({
           // Nur Videospuren bis zur geprüften Auflösung – darüber sperrt YouTube
-          format_filter: (f) => f.has_video && (f.height || 0) > cap,
+          format_filter: (f) => (f.has_video && (f.height || 0) > cap) || dubbed(f),
         });
         const result = { ...meta, kind: 'dash', manifest, maxHeight: cap, poToken: Boolean(po), degraded: tried.length > 1, note: tried.length > 1 ? `höhere Qualität gesperrt (${tried.slice(0, -1).join(', ')})` : null };
         ctx.trail.push(`${label}: ${cap}p${result.degraded ? ` (${tried.slice(0, -1).join(', ')} gesperrt)` : ''}`);
@@ -679,7 +707,8 @@ async function trySabr(id, group, ctx, names = SABR_CLIENTS) {
         continue;
       }
       const maxHeight = Math.max(0, ...heights.filter((h) => h <= ctx.maxHeight)) || Math.min(...heights);
-      const manifest = await info.toDash({ manifest_options: { is_sabr: true }, format_filter: (f) => !mp4(f) });
+      const dubbed = notOriginalAudio(sd.adaptive_formats);
+      const manifest = await info.toDash({ manifest_options: { is_sabr: true }, format_filter: (f) => !mp4(f) || dubbed(f) });
       ctx.trail.push(`${label}: bis ${maxHeight}p${po ? ' (mit PO-Token)' : ''}`);
       return {
         id,

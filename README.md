@@ -60,7 +60,7 @@ gibt nur niedrige Qualität frei oder ein Video ist altersbeschränkt. Dafür gi
 | **Keine Werbung** | Keine Videowerbung, keine Banner |
 | **SponsorBlock** | Gesponserte Abschnitte werden übersprungen (grün auf dem Fortschrittsbalken), Kategorien einstellbar |
 | **Auch ohne Handy** | Suche mit Vorschlägen, „Weiter ansehen“, Empfehlungen aus deinem Verlauf, Mini-Player beim Stöbern |
-| **Player** | Bis 4K, Qualität und Geschwindigkeit wählbar, Live-Streams, Autoplay, Vollbild, Medientasten der Tastatur |
+| **Player** | Bis 4K, Qualität und Geschwindigkeit wählbar, Live-Streams, Autoplay, Vollbild, Medientasten der Tastatur. Immer der **Originalton** – Synchronfassungen und KI-Übersetzungen von YouTube werden aussortiert |
 | **Im Hintergrund** | Fenster schließen legt GX Tube in den Infobereich – das Handy findet den PC trotzdem. Optional mit dem Computer starten. |
 | **Updates** | Installierte Windows- und AppImage-Versionen aktualisieren sich selbst |
 | **Google-Konto** | Optional, falls YouTube ohne Anmeldung sperrt (siehe oben) |
