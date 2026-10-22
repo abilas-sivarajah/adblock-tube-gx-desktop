@@ -46,3 +46,20 @@ test('Empfehlungen ohne Gesehenes und ohne Shorts', () => {
   s.addRecommendations([video('seen_______'), { ...video('short______'), isShort: true }, video('new________')]);
   assert.deepEqual(s.recommendations.map((v) => v.id), ['new________']);
 });
+
+test('Abos: abonnieren, beenden, aus dem Konto dazunehmen, bleiben gespeichert', () => {
+  const dir = tmp();
+  const s = new Store(dir);
+  const rick = { id: 'UCuAXFkgsw1L7xaCfnd5JJOw', name: 'Rick Astley', thumbnail: null };
+  s.setSubscribed(rick, true);
+  s.setSubscribed({ id: 'UC0000000000000000000001', name: 'Zwei', thumbnail: null }, true);
+  assert.equal(s.subscriptions[0].name, 'Zwei', 'neueste zuerst');
+  assert.ok(s.isSubscribed(rick.id));
+  s.setSubscribed(rick, false);
+  assert.equal(s.isSubscribed(rick.id), false);
+  assert.equal(s.mergeSubscriptions([{ id: 'UC0000000000000000000001', name: 'Zwei', thumbnail: null }]), false, 'nichts Neues');
+  assert.equal(s.mergeSubscriptions([rick, { id: 'UC0000000000000000000001', name: 'Zwei (neu)', thumbnail: null }]), true);
+  s.saveLibraryNow();
+  const again = new Store(dir);
+  assert.deepEqual(again.subscriptions.map((c) => c.name).sort(), ['Rick Astley', 'Zwei (neu)']);
+});

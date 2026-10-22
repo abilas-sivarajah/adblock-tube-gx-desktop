@@ -11,7 +11,7 @@ import * as Account from './account.js';
 import { CastServer } from './cast-server.js';
 import { Session } from './session.js';
 import { Store, lanAddresses } from './store.js';
-import { sanitizeVideo } from './protocol.js';
+import { sanitizeChannel, sanitizeVideo } from './protocol.js';
 import { checkForUpdates, installUpdate, setupUpdates, updateStatus } from './updater.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -125,6 +125,8 @@ async function start() {
   updates = setupUpdates({ enabled: () => store.settings.autoUpdate, toast, onStatus: (s) => send('update:status', s) });
   // BotGuard schon mal im Hintergrund starten, damit das erste Video nicht wartet
   setTimeout(() => PoToken.warmUp(), 3000);
+  // Abos aus dem YouTube-Konto übernehmen
+  setTimeout(() => syncAccountSubscriptions(), 15000);
 }
 
 app.on('before-quit', () => {
@@ -309,7 +311,7 @@ async function loadVideo({ video, startMs, exclude = [], fallback = false }) {
         if (token !== loadToken) return;
         session.setRelated(video.id, d.related);
         store.addRecommendations(d.related.slice(0, 12));
-        const enriched = { ...video, title: d.title || video.title, channelName: d.channelName || video.channelName, durationSec: d.durationSec > 0 ? d.durationSec : video.durationSec, isLive: d.isLive };
+        const enriched = { ...video, title: d.title || video.title, channelName: d.channelName || video.channelName, channelId: d.channelId || video.channelId || null, durationSec: d.durationSec > 0 ? d.durationSec : video.durationSec, isLive: d.isLive };
         updateCurrentVideo(enriched);
         current.details = { ...d, related: d.related.slice(0, 20) };
         send('player:details', { token, details: current.details });
@@ -332,7 +334,7 @@ async function loadVideo({ video, startMs, exclude = [], fallback = false }) {
     current.resolvedAt = Date.now();
     console.info(`[stream] ${video.id} über ${stream.client}${stream.poToken ? ' mit PO-Token' : ''}, bis ${stream.maxHeight}p${stream.note ? ` – ${stream.note}` : ''}${stream.degraded ? ` [${stream.attempts?.join(' | ')}]` : ''}`);
     if (stream.account && !Account.status().name) loadAccountProfile();
-    updateCurrentVideo({ ...video, title: stream.title || video.title, channelName: stream.channelName || video.channelName, durationSec: stream.durationSec > 0 ? stream.durationSec : video.durationSec, isLive: stream.isLive });
+    updateCurrentVideo({ ...video, title: stream.title || video.title, channelName: stream.channelName || video.channelName, channelId: stream.channelId || video.channelId || null, durationSec: stream.durationSec > 0 ? stream.durationSec : video.durationSec, isLive: stream.isLive });
     send('player:source', { token, video: current.video, stream, startMs: stream.isLive ? null : resume, maxQuality: store.settings.maxQuality });
   } catch (err) {
     if (token !== loadToken) return;
@@ -360,6 +362,7 @@ function signedIn() {
   send('account', Account.status());
   toast('Mit Google angemeldet');
   loadAccountProfile();
+  syncAccountSubscriptions();
   // Ist gerade ein Video gescheitert oder läuft nur in niedriger Qualität? Gleich nochmal – diesmal mit Konto
   if (current?.error || current?.stream?.degraded) loadVideo({ video: current.video, startMs: playback.positionMs || current.startMs });
 }
@@ -404,6 +407,37 @@ function loadAccountProfile() {
     .finally(() => {
       profileLoading = false;
     });
+}
+
+// ------------------------------------------------------------------ Abos
+
+/** Abos aus dem YouTube-Konto übernehmen (soweit YouTube die Liste herausgibt). */
+function syncAccountSubscriptions() {
+  if (!Account.loggedIn()) return;
+  YT.accountSubscriptions()
+    .then((list) => {
+      if (list && store.mergeSubscriptions(list)) send('subs', store.subscriptions);
+    })
+    .catch((e) => console.warn('[abos]', e?.message ?? e));
+}
+
+/** Abonnieren / Abo beenden: auf diesem PC und – angemeldet – auch bei YouTube. */
+async function setSubscribed(channel, on) {
+  const c = sanitizeChannel(channel);
+  let synced = false;
+  let error = null;
+  if (Account.loggedIn()) {
+    try {
+      await YT.accountSubscribe(c.id, on);
+      synced = true;
+    } catch (e) {
+      error = e?.message ?? String(e);
+      console.warn('[abos]', error);
+    }
+  }
+  store.setSubscribed(c, on);
+  send('subs', store.subscriptions);
+  return { subscribed: on, synced, error };
 }
 
 async function logout() {
@@ -670,6 +704,11 @@ function setupIpc() {
   ipcMain.on('window:fullscreen', (_e, on) => win?.setFullScreen(Boolean(on)));
   ipcMain.handle('window:isFullscreen', () => Boolean(win?.isFullScreen()));
   ipcMain.on('clients:kick', (_e, id) => server?.kick(Number(id)));
+  ipcMain.handle('yt:channel', (_e, id) => YT.channel(String(id)));
+  ipcMain.handle('yt:channelMore', (_e, token) => YT.channelMore(String(token)));
+  ipcMain.handle('subs:list', () => store.subscriptions);
+  ipcMain.handle('subs:set', (_e, channel, on) => setSubscribed(channel, on === true));
+  ipcMain.handle('subs:feed', () => YT.subscriptionFeed(store.subscriptions));
   ipcMain.handle('potoken:mint', (_e, binding) => YT.mintPoToken(String(binding)));
   ipcMain.handle('yt:sabrReload', (_e, id, client) => YT.sabrReload(String(id), String(client)));
   ipcMain.handle('account:status', () => Account.status());

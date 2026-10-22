@@ -37,6 +37,11 @@ const PO_CLIENTS = new Set(['MWEB', 'WEB']);
 const BOT_REASON = /bot|sign in|anmelden|confirm you/i;
 
 export const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
+export const CHANNEL_ID = /^UC[A-Za-z0-9_-]{22}$/;
+const channelIdOf = (value) => (CHANNEL_ID.test(value ?? '') ? value : null);
+// Zeilen wie "109.546 Aufrufe" oder "vor 3 Monaten" sind kein Kanalname
+const VIEWS_TEXT = /aufrufe|views|zuschauer|watching/i;
+const PUBLISHED_TEXT = /^vor |ago$|gestreamt|streamed|premiere/i;
 
 // poTokens: { available(): boolean, mint(binding): Promise<string> } – siehe potoken.js
 // account: { loggedIn(), method(), cookieHeader(), deviceTokens(), onTokens(tokens), fetch, onExpired() } – siehe account.js
@@ -218,11 +223,13 @@ export function toVideo(node) {
     return {
       id,
       title: text(node.metadata?.title),
-      channelName: parts[0] || '',
+      channelName: parts.find((p) => !VIEWS_TEXT.test(p) && !PUBLISHED_TEXT.test(p)) || '',
+      // Kanal steckt im Klick aufs Kanalbild
+      channelId: channelIdOf(node.metadata?.image?.renderer_context?.command_context?.on_tap?.payload?.browseId),
       thumbnail: bestThumb(node.content_image?.image ?? node.content_image?.primary_thumbnail?.image, id),
       durationSec: parseDuration(durationText),
-      viewsText: parts.find((p) => /aufrufe|views|zuschauer|watching/i.test(p)) || '',
-      publishedText: parts.find((p) => /^vor |ago$|gestreamt|streamed/i.test(p)) || '',
+      viewsText: parts.find((p) => VIEWS_TEXT.test(p)) || '',
+      publishedText: parts.find((p) => PUBLISHED_TEXT.test(p)) || '',
       isLive: live,
       isShort: node.content_type === 'SHORT',
     };
@@ -234,6 +241,7 @@ export function toVideo(node) {
       id,
       title: text(node.overlay_metadata?.primary_text),
       channelName: '',
+      channelId: null,
       thumbnail: bestThumb(node.thumbnail, id),
       durationSec: -1,
       viewsText: text(node.overlay_metadata?.secondary_text),
@@ -250,6 +258,7 @@ export function toVideo(node) {
     id,
     title: text(node.title),
     channelName: node.author?.name && node.author.name !== 'N/A' ? node.author.name : text(node.short_byline_text ?? node.author),
+    channelId: channelIdOf(node.author?.id),
     thumbnail: bestThumb(node.thumbnails ?? node.thumbnail, id),
     durationSec,
     viewsText: text(node.short_view_count ?? node.view_count ?? node.views),
@@ -522,6 +531,7 @@ async function tryClients(id, group, ctx) {
         id,
         title: b.title ?? '',
         channelName: b.author ?? '',
+        channelId: channelIdOf(b.channel_id),
         thumbnail: bestThumb(b.thumbnail, id),
         durationSec: b.duration ?? -1,
         isLive: Boolean(b.is_live),
@@ -675,6 +685,7 @@ async function trySabr(id, group, ctx, names = SABR_CLIENTS) {
         id,
         title: b.title ?? '',
         channelName: b.author ?? '',
+        channelId: channelIdOf(b.channel_id),
         thumbnail: bestThumb(b.thumbnail, id),
         durationSec: b.duration ?? -1,
         isLive: false,
@@ -921,4 +932,160 @@ export async function startDeviceLogin() {
     done,
     cancel: () => fail(new DeviceLoginError('cancelled')),
   };
+}
+
+// ------------------------------------------------------------------ Kanäle und Abos
+
+/** Kopf und Videos eines Kanals (anonym – klappt auch, wenn die Player-Anfragen gesperrt sind). */
+export async function channel(id) {
+  if (!CHANNEL_ID.test(id)) throw new Error('Ungültige Kanal-ID');
+  return guarded(async () => {
+    const yt = await client();
+    const ch = await yt.getChannel(id);
+    const head = ch.header?.content ?? ch.header; // PageHeaderView (neu) oder ältere Kopf-Varianten
+    const name = ch.metadata?.title || text(head?.title) || text(ch.header?.author?.name) || '';
+    const parts = (head?.metadata?.metadata_rows ?? []).flatMap((r) => (r.metadata_parts ?? []).map((p) => text(p.text))).filter(Boolean);
+    const handle = parts.find((p) => p.startsWith('@')) || null;
+    const subscribersText = parts.find((p) => /abonnent|subscriber/i.test(p)) || text(ch.header?.subscribers) || '';
+    const videosText = parts.find((p) => /video/i.test(p)) || '';
+    const avatar = bestThumb(head?.image?.avatar?.image ?? head?.image?.image ?? ch.metadata?.avatar ?? ch.metadata?.thumbnail ?? ch.header?.author?.thumbnails);
+    const banner = fittingThumb(head?.banner?.image ?? ch.header?.banner, 1060);
+    let list = { items: [], next: null };
+    if (ch.has_videos) list = storeChannelVideos(await ch.getVideos(), { id, name });
+    return { id, name, handle, subscribersText, videosText, avatar, banner, description: String(ch.metadata?.description ?? '').slice(0, 400), ...list };
+  });
+}
+
+/** Kleinstes Bild, das mindestens [width] breit ist (Banner gibt es bis 2560 px – unnötig groß). */
+function fittingThumb(list, width) {
+  const arr = (Array.isArray(list) ? list : []).filter((t) => t?.url).sort((a, b) => (a.width || 0) - (b.width || 0));
+  const pick = arr.find((t) => (t.width || 0) >= width) ?? arr.at(-1);
+  return pick ? (pick.url.startsWith('//') ? 'https:' + pick.url : pick.url) : null;
+}
+
+/** Weitere Videos eines Kanals. */
+export async function channelMore(token) {
+  const prev = continuations.get(token);
+  if (!prev) return { items: [], next: null };
+  continuations.delete(token);
+  return guarded(async () => storeChannelVideos(await prev.list.getContinuation(), prev.channel));
+}
+
+const continuations = new Map();
+let continuationCounter = 0;
+
+function storeChannelVideos(list, channelInfo) {
+  let next = null;
+  if (list.has_continuation) {
+    next = 'c' + ++continuationCounter;
+    continuations.set(next, { list, channel: channelInfo });
+    for (const key of continuations.keys()) if (continuations.size > 20) continuations.delete(key);
+  }
+  // Auf der Kanalseite fehlt der Kanalname an den Videos – er ist ja klar
+  const items = unique((list.videos ?? []).map(toVideo)).map((v) => ({ ...v, kind: 'video', channelId: v.channelId ?? channelInfo.id, channelName: channelInfo.name || v.channelName }));
+  return { items, next };
+}
+
+/** Mit Google-Konto bei YouTube abonnieren bzw. das Abo beenden (Web-Client, sonst wie der Fernseher). */
+export async function accountSubscribe(id, on) {
+  if (!CHANNEL_ID.test(id)) throw new Error('Ungültige Kanal-ID');
+  const { yt } = await accountClient();
+  const endpoint = on ? '/subscription/subscribe' : '/subscription/unsubscribe';
+  const body = { channelIds: [id], params: on ? 'EgIIAhgA' : 'CgIIAhgA' };
+  try {
+    await yt.actions.execute(endpoint, body);
+  } catch (first) {
+    try {
+      await yt.actions.execute(endpoint, { ...body, client: 'TV' });
+    } catch {
+      throw new Error(shortError(first));
+    }
+  }
+}
+
+/** Abos aus dem YouTube-Konto (Liste "Kanäle"); null, wenn YouTube sie nicht herausgibt. */
+export async function accountSubscriptions() {
+  const { yt } = await accountClient();
+  const res = await yt.actions.execute('/browse', { browseId: 'FEchannels' });
+  const found = new Map();
+  const walk = (node, depth = 0) => {
+    if (!node || typeof node !== 'object' || depth > 40) return;
+    if (Array.isArray(node)) {
+      for (const n of node) walk(n, depth + 1);
+      return;
+    }
+    const r = node.channelRenderer ?? node.gridChannelRenderer;
+    if (r && CHANNEL_ID.test(r.channelId ?? '') && !found.has(r.channelId)) {
+      const title = r.title?.simpleText ?? r.title?.runs?.map((x) => x.text).join('') ?? '';
+      found.set(r.channelId, { id: r.channelId, name: title, thumbnail: bestThumb(r.thumbnail?.thumbnails) });
+    }
+    for (const v of Object.values(node)) if (v && typeof v === 'object') walk(v, depth + 1);
+  };
+  walk(res.data);
+  return found.size ? [...found.values()] : null;
+}
+
+// Neue Videos der Abos über die öffentlichen RSS-Feeds der Kanäle: ohne Konto, ohne Bot-Sperre
+const feedCache = new Map(); // Kanal → { at, videos }
+const FEED_TTL_MS = 15 * 60 * 1000;
+
+const xmlText = (s) =>
+  String(s ?? '')
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&amp;/g, '&');
+
+/** Einträge eines Kanal-Feeds (YouTube-RSS). */
+export function parseFeed(xml, channelInfo = {}) {
+  const out = [];
+  for (const m of String(xml).matchAll(/<entry>([\s\S]*?)<\/entry>/g)) {
+    const e = m[1];
+    const pick = (re) => e.match(re)?.[1];
+    const id = pick(/<yt:videoId>([^<]+)<\/yt:videoId>/);
+    if (!VIDEO_ID.test(id ?? '')) continue;
+    const published = Date.parse(pick(/<published>([^<]+)<\/published>/) ?? '');
+    const views = Number(pick(/<media:statistics views="(\d+)"/));
+    out.push({
+      id,
+      title: xmlText(pick(/<title>([\s\S]*?)<\/title>/)),
+      channelName: xmlText(pick(/<author>\s*<name>([\s\S]*?)<\/name>/)) || channelInfo.name || '',
+      channelId: channelIdOf(pick(/<yt:channelId>([^<]+)<\/yt:channelId>/)) ?? channelInfo.id ?? null,
+      thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+      durationSec: -1,
+      viewsText: Number.isFinite(views) && views > 0 ? `${views.toLocaleString('de-DE')} Aufrufe` : '',
+      publishedAt: Number.isFinite(published) ? published : 0,
+      isLive: false,
+      isShort: /href="https:\/\/www\.youtube\.com\/shorts\//.test(e),
+    });
+  }
+  return out;
+}
+
+async function channelFeed(c) {
+  const cached = feedCache.get(c.id);
+  if (cached && Date.now() - cached.at < FEED_TTL_MS) return cached.videos;
+  const fetchImpl = options.fetch ?? globalThis.fetch;
+  const res = await fetchImpl(`https://www.youtube.com/feeds/videos.xml?channel_id=${c.id}`);
+  if (!res.ok) throw new Error(`Feed ${res.status}`);
+  const videos = parseFeed(await res.text(), c);
+  feedCache.set(c.id, { at: Date.now(), videos });
+  return videos;
+}
+
+/** Neueste Videos aller Abos (ohne Shorts), neueste zuerst. */
+export async function subscriptionFeed(channels, limit = 48) {
+  const list = (channels ?? []).filter((c) => CHANNEL_ID.test(c?.id ?? '')).slice(0, 100);
+  const all = [];
+  for (let i = 0; i < list.length; i += 8) {
+    const batch = await Promise.all(list.slice(i, i + 8).map((c) => channelFeed(c).catch(() => [])));
+    for (const videos of batch) all.push(...videos);
+  }
+  return all
+    .filter((v) => !v.isShort)
+    .sort((a, b) => b.publishedAt - a.publishedAt)
+    .slice(0, limit);
 }

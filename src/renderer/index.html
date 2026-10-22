@@ -34,6 +34,11 @@
   <main id="views">
     <section id="view-home" class="view active">
       <div id="castHero" class="hero"></div>
+      <div id="shelfSubs" class="shelf" hidden>
+        <div class="shelf-head"><h2>Neu von deinen Abos</h2><span class="hint" id="subsHint"></span></div>
+        <div class="sub-chips" id="subChips"></div>
+        <div class="grid" id="subsGrid"></div>
+      </div>
       <div id="shelfContinue" class="shelf" hidden>
         <div class="shelf-head"><h2>Weiter ansehen</h2></div>
         <div class="row-scroll" id="continueRow"></div>
@@ -47,6 +52,12 @@
     <section id="view-search" class="view">
       <div class="grid" id="searchGrid"></div>
       <div id="searchStatus" class="status"></div>
+    </section>
+
+    <section id="view-channel" class="view">
+      <div id="channelHead" class="channel-head"></div>
+      <div class="grid" id="channelGrid"></div>
+      <div id="channelStatus" class="status"></div>
     </section>
 
     <section id="view-settings" class="view">

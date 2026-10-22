@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ProtocolError, isDiscoveryRequest, isLocalAddress, parseCommand, sanitizeVideo } from '../src/main/protocol.js';
+import { ProtocolError, isDiscoveryRequest, isLocalAddress, parseCommand, sanitizeChannel, sanitizeVideo } from '../src/main/protocol.js';
 
 test('Video wird geprüft und gekürzt', () => {
   const v = sanitizeVideo({ id: 'dQw4w9WgXcQ', title: 'x'.repeat(500), channelName: 'Rick', thumbnail: 'http://evil/x.png', durationSec: 213.4, extra: 1 });
@@ -10,6 +10,14 @@ test('Video wird geprüft und gekürzt', () => {
   assert.equal(v.extra, undefined);
   assert.throws(() => sanitizeVideo({ id: '../../etc' }), ProtocolError);
   assert.throws(() => sanitizeVideo(null), ProtocolError);
+  assert.equal(v.channelId, null);
+  assert.equal(sanitizeVideo({ id: 'dQw4w9WgXcQ', channelId: 'UCuAXFkgsw1L7xaCfnd5JJOw' }).channelId, 'UCuAXFkgsw1L7xaCfnd5JJOw');
+  assert.equal(sanitizeVideo({ id: 'dQw4w9WgXcQ', channelId: 'javascript:alert(1)' }).channelId, null);
+});
+
+test('Kanal fürs Abonnieren wird geprüft', () => {
+  assert.deepEqual(sanitizeChannel({ id: 'UCuAXFkgsw1L7xaCfnd5JJOw', name: 'Rick', thumbnail: 'http://x/y.png', extra: 1 }), { id: 'UCuAXFkgsw1L7xaCfnd5JJOw', name: 'Rick', thumbnail: null });
+  assert.throws(() => sanitizeChannel({ id: 'nope' }), ProtocolError);
 });
 
 test('Befehle werden erkannt und Werte begrenzt', () => {

@@ -58,7 +58,9 @@ Ein **Video** besteht aus:
   "durationSec": 213, "isLive": false }
 ```
 
-Nur `id` (11 Zeichen) ist Pflicht – fehlende Angaben holt sich der PC selbst.
+Nur `id` (11 Zeichen) ist Pflicht – fehlende Angaben holt sich der PC selbst. Optional ist
+`channelId` (`UC…`, 24 Zeichen); der PC schickt sie in `queue`/`state` mit, sobald er sie kennt.
+Unbekannte Felder müssen ignoriert werden.
 
 | `type` | Felder | Wirkung |
 |---|---|---|

@@ -8,6 +8,7 @@ export const WS_PATH = '/gxtube';
 export const MAX_QUEUE = 500;
 
 const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
+export const CHANNEL_ID = /^UC[A-Za-z0-9_-]{22}$/;
 
 export class ProtocolError extends Error {}
 
@@ -38,10 +39,17 @@ export function sanitizeVideo(v) {
     id: v.id,
     title: str(v.title, 300),
     channelName: str(v.channelName, 200),
+    channelId: CHANNEL_ID.test(v.channelId ?? '') ? v.channelId : null,
     thumbnail: imageUrl(v.thumbnail) ?? `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`,
     durationSec: Math.round(num(v.durationSec, -1, 1e7, -1)),
     isLive: v.isLive === true,
   };
+}
+
+/** Ein Kanal (fürs Abonnieren). */
+export function sanitizeChannel(c) {
+  if (!c || typeof c !== 'object' || !CHANNEL_ID.test(c.id ?? '')) throw new ProtocolError('Ungültiger Kanal');
+  return { id: c.id, name: str(c.name, 200), thumbnail: imageUrl(c.thumbnail) };
 }
 
 function sanitizeQueue(list) {

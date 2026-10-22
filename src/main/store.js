@@ -51,6 +51,8 @@ export class Store {
     this.history = Array.isArray(lib.history) ? lib.history : [];
     this.recommendations = Array.isArray(lib.recommendations) ? lib.recommendations : [];
     this.searchHistory = Array.isArray(lib.searchHistory) ? lib.searchHistory : [];
+    // Abos: { id, name, thumbnail, since } – auf diesem PC, mit Google-Konto zusätzlich bei YouTube
+    this.subscriptions = Array.isArray(lib.subscriptions) ? lib.subscriptions : [];
     let dirty = false;
     if (!this.settings.deviceId) {
       this.settings.deviceId = randomUUID();
@@ -93,7 +95,7 @@ export class Store {
 
   saveLibraryNow() {
     clearTimeout(this.libraryTimer);
-    writeJson(this.libraryFile, { history: this.history, recommendations: this.recommendations, searchHistory: this.searchHistory });
+    writeJson(this.libraryFile, { history: this.history, recommendations: this.recommendations, searchHistory: this.searchHistory, subscriptions: this.subscriptions });
   }
 
   historyEntry(id) {
@@ -140,6 +142,40 @@ export class Store {
     const ids = new Set(fresh.map((v) => v.id));
     this.recommendations = [...fresh, ...this.recommendations.filter((v) => !ids.has(v.id))].slice(0, MAX_RECOMMENDATIONS);
     this.saveLibrarySoon();
+  }
+
+  isSubscribed(id) {
+    return this.subscriptions.some((s) => s.id === id);
+  }
+
+  /** Kanal abonnieren bzw. das Abo beenden (neueste zuerst). */
+  setSubscribed(channel, on) {
+    const old = this.subscriptions.find((s) => s.id === channel.id);
+    const rest = this.subscriptions.filter((s) => s.id !== channel.id);
+    this.subscriptions = on ? [{ ...old, ...channel, name: channel.name || old?.name || '', since: old?.since ?? Date.now() }, ...rest] : rest;
+    this.saveLibrarySoon();
+    return this.subscriptions;
+  }
+
+  /** Abos aus dem YouTube-Konto dazunehmen (vorhandene bleiben, Namen/Bilder werden aufgefrischt). */
+  mergeSubscriptions(list) {
+    const known = new Map(this.subscriptions.map((s) => [s.id, s]));
+    let changed = false;
+    for (const c of list ?? []) {
+      const old = known.get(c.id);
+      if (!old) {
+        known.set(c.id, { ...c, since: Date.now() });
+        changed = true;
+      } else if ((c.name && c.name !== old.name) || (c.thumbnail && c.thumbnail !== old.thumbnail)) {
+        known.set(c.id, { ...old, name: c.name || old.name, thumbnail: c.thumbnail || old.thumbnail });
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.subscriptions = [...known.values()];
+      this.saveLibrarySoon();
+    }
+    return changed;
   }
 
   addSearch(query) {

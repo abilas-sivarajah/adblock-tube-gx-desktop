@@ -88,3 +88,41 @@ test('Zuletzt erfolgreicher Client kommt zuerst (nur wenn vorhanden)', async () 
   const { withLastGoodFirst, STREAM_CLIENTS } = await import('../src/main/youtube.js');
   assert.deepEqual(withLastGoodFirst(STREAM_CLIENTS, 'Test '), STREAM_CLIENTS);
 });
+
+test('Kanal-ID aus ähnlichen Videos (LockupView) und Suchergebnissen', async () => {
+  const { toVideo } = await import('../src/main/youtube.js');
+  const lockup = toVideo({
+    type: 'LockupView',
+    content_type: 'VIDEO',
+    content_id: 'PXC_PYeB6F8',
+    content_image: { image: [{ url: 'https://i.ytimg.com/a.jpg', width: 1 }] },
+    metadata: {
+      title: { text: 'Angels On My Side' },
+      image: { renderer_context: { command_context: { on_tap: { payload: { browseId: 'UCuAXFkgsw1L7xaCfnd5JJOw' } } } } },
+      metadata: { metadata_rows: [{ metadata_parts: [{ text: { text: '109.546 Aufrufe' } }, { text: { text: 'vor 3 Monaten' } }] }] },
+    },
+  });
+  assert.equal(lockup.channelId, 'UCuAXFkgsw1L7xaCfnd5JJOw');
+  assert.equal(lockup.channelName, '', 'Aufrufe sind kein Kanalname');
+  assert.equal(lockup.viewsText, '109.546 Aufrufe');
+  const video = toVideo({ type: 'Video', video_id: 'dQw4w9WgXcQ', title: { text: 'Rick' }, author: { name: 'Rick Astley', id: 'UCuAXFkgsw1L7xaCfnd5JJOw' }, duration: { seconds: 213 } });
+  assert.equal(video.channelId, 'UCuAXFkgsw1L7xaCfnd5JJOw');
+  assert.equal(toVideo({ type: 'Video', video_id: 'dQw4w9WgXcQ', author: { name: 'X', id: 'N/A' } }).channelId, null);
+});
+
+test('Abo-Feed (RSS) wird gelesen, Shorts erkannt', async () => {
+  const { parseFeed } = await import('../src/main/youtube.js');
+  const xml = `<feed><entry><id>yt:video:E_MGy41IYVw</id><yt:videoId>E_MGy41IYVw</yt:videoId><yt:channelId>UCuAXFkgsw1L7xaCfnd5JJOw</yt:channelId>
+    <title>Kurz &amp; gut</title><link rel="alternate" href="https://www.youtube.com/shorts/E_MGy41IYVw"/><author><name>Rick Astley</name></author>
+    <published>2026-09-20T08:52:27+00:00</published><media:statistics views="1234"/></entry>
+    <entry><yt:videoId>dQw4w9WgXcQ</yt:videoId><title>Never Gonna Give You Up</title><link rel="alternate" href="https://www.youtube.com/watch?v=dQw4w9WgXcQ"/>
+    <author><name>Rick Astley</name></author><published>2009-10-25T06:57:33+00:00</published></entry><entry><yt:videoId>kaputt</yt:videoId></entry></feed>`;
+  const list = parseFeed(xml, { id: 'UCuAXFkgsw1L7xaCfnd5JJOw', name: 'Rick' });
+  assert.equal(list.length, 2);
+  assert.equal(list[0].title, 'Kurz & gut');
+  assert.equal(list[0].isShort, true);
+  assert.equal(list[0].viewsText, '1.234 Aufrufe');
+  assert.equal(list[1].isShort, false);
+  assert.equal(list[1].channelId, 'UCuAXFkgsw1L7xaCfnd5JJOw');
+  assert.ok(list[0].publishedAt > list[1].publishedAt);
+});

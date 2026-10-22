@@ -2,7 +2,7 @@
 
 import { Player } from './player.js';
 import { hydrateIcons, icon, setIcon } from './icons.js';
-import { duration, durationMs, el, qualityLabel, speedLabel } from './format.js';
+import { duration, durationMs, el, qualityLabel, relativeTime, speedLabel } from './format.js';
 
 const gx = window.gx;
 const $ = (id) => document.getElementById(id);
@@ -22,6 +22,9 @@ const state = {
   error: null,
   errorSignIn: false,
   account: { loggedIn: false },
+  subs: [], // abonnierte Kanäle { id, name, thumbnail }
+  channel: null, // offene Kanalseite { id, data, next, loading }
+  prevView: 'home',
   search: { query: '', next: null, loading: false },
 };
 
@@ -56,6 +59,7 @@ async function boot() {
   state.update = await gx.updateStatus();
   renderUpdate();
   state.account = await gx.accountStatus();
+  state.subs = await gx.subscriptions();
   $('btnSignIn').addEventListener('click', () => signIn());
   $('signInDialog').addEventListener('click', (e) => {
     if (e.target === $('signInDialog')) closeSignInDialog();
@@ -92,6 +96,7 @@ function bindEvents() {
     if (token !== state.token) return;
     state.details = details;
     renderRelated();
+    renderTitle();
   });
   gx.onSegments(onSegments);
   gx.onStop(() => {
@@ -138,6 +143,11 @@ function bindEvents() {
     renderAccount();
   });
   gx.onDeviceLogin(onDeviceLogin);
+  gx.onSubs((list) => {
+    state.subs = list;
+    renderSubButtons();
+    if (state.view === 'home') renderSubsShelf();
+  });
 }
 
 function onLoading({ token, video: v }) {
@@ -264,6 +274,10 @@ function bindTopbar() {
     const v = e.currentTarget;
     if (v.scrollTop + v.clientHeight > v.scrollHeight - 800) loadMoreSearch();
   });
+  $('view-channel').addEventListener('scroll', (e) => {
+    const v = e.currentTarget;
+    if (v.scrollTop + v.clientHeight > v.scrollHeight - 800) loadMoreChannel();
+  });
 }
 
 function renderSuggestions(list, history = false) {
@@ -346,6 +360,7 @@ function showView(name) {
 
 async function renderHome() {
   renderHero();
+  renderSubsShelf();
   const lib = await gx.library();
   const cont = lib.history.filter((h) => h.durationMs > 0 && h.positionMs > 5000 && h.positionMs < h.durationMs - 15000).slice(0, 20);
   $('shelfContinue').hidden = cont.length === 0;
@@ -355,6 +370,153 @@ async function renderHome() {
   $('shelfReco').hidden = reco.length === 0 && recent.length === 0;
   $('shelfReco').querySelector('h2').textContent = reco.length ? 'Empfohlen' : 'Verlauf';
   $('recoGrid').replaceChildren(...(reco.length ? reco : recent.map((h) => h.video)).map((v) => videoCard(v)));
+}
+
+// ------------------------------------------------------------------ Kanäle und Abos
+
+const isSubscribed = (id) => state.subs.some((s) => s.id === id);
+let channelSeq = 0;
+
+/** Kanalseite öffnen (Kopf mit Abonnieren, darunter die Videos). */
+async function openChannel(id, name = '') {
+  if (!id) return;
+  closeMenu();
+  if (state.view !== 'channel') state.prevView = state.view;
+  showView('channel');
+  const seq = ++channelSeq;
+  state.channel = { id, data: { id, name }, next: null, loading: true };
+  renderChannelHead();
+  $('channelGrid').replaceChildren();
+  $('channelStatus').textContent = 'Lädt …';
+  $('view-channel').scrollTop = 0;
+  try {
+    const data = await gx.channel(id);
+    if (seq !== channelSeq) return;
+    state.channel.data = data;
+    state.channel.next = data.next;
+    renderChannelHead();
+    $('channelGrid').append(...data.items.filter((v) => !v.isShort).map((v) => videoCard(v)));
+    $('channelStatus').textContent = data.items.length ? '' : 'Keine Videos';
+  } catch (err) {
+    if (seq === channelSeq) $('channelStatus').textContent = 'Kanal konnte nicht geladen werden: ' + cleanError(err);
+  } finally {
+    if (seq === channelSeq) state.channel.loading = false;
+  }
+}
+
+async function loadMoreChannel() {
+  const c = state.channel;
+  if (!c || c.loading || !c.next) return;
+  c.loading = true;
+  const seq = channelSeq;
+  try {
+    const res = await gx.channelMore(c.next);
+    if (seq !== channelSeq) return;
+    $('channelGrid').append(...res.items.filter((v) => !v.isShort).map((v) => videoCard(v)));
+    c.next = res.next;
+  } catch {
+    c.next = null;
+  } finally {
+    c.loading = false;
+  }
+}
+
+function renderChannelHead() {
+  const d = state.channel?.data;
+  const head = $('channelHead');
+  if (!d) return head.replaceChildren();
+  const parts = [];
+  if (d.banner) {
+    const banner = el('img', 'channel-banner');
+    banner.src = d.banner;
+    banner.alt = '';
+    parts.push(banner);
+  }
+  head.classList.toggle('no-banner', !d.banner);
+  const back = el('button', 'icon-btn channel-back');
+  back.title = 'Zurück';
+  back.append(icon('back'));
+  back.addEventListener('click', () => showView(state.prevView === 'channel' ? 'home' : state.prevView || 'home'));
+  const info = el('div', 'channel-info');
+  const avatar = el('img', 'channel-avatar');
+  if (d.avatar) avatar.src = d.avatar;
+  avatar.alt = '';
+  const text = el('div', 'channel-text');
+  text.append(el('h1', null, d.name || 'Kanal'));
+  const meta = [d.handle, d.subscribersText, d.videosText].filter(Boolean).join(' • ');
+  if (meta) text.append(el('div', 'channel-meta', meta));
+  if (d.description) text.append(el('p', 'channel-desc', d.description));
+  info.append(avatar, text, subscribeButton({ id: d.id, name: d.name, thumbnail: d.avatar }));
+  head.replaceChildren(...parts, back, info);
+}
+
+/** Abonnieren-Knopf; bleibt über data-sub aktuell, wenn sich die Abos ändern. */
+function subscribeButton(c) {
+  const btn = el('button');
+  btn.dataset.sub = c.id;
+  fillSubscribeButton(btn);
+  btn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const on = !isSubscribed(c.id);
+    btn.disabled = true;
+    try {
+      const r = await gx.setSubscribed({ id: c.id, name: c.name || '', thumbnail: c.thumbnail || null }, on);
+      const loggedIn = state.account?.loggedIn;
+      if (on) toast(r.synced ? `${c.name || 'Kanal'} abonniert` : loggedIn ? `Abonniert – nur auf diesem PC (YouTube: ${r.error})` : `${c.name || 'Kanal'} abonniert (auf diesem PC). Mit Google angemeldet landet es auch bei YouTube.`);
+      else toast(r.synced || !loggedIn ? 'Abo beendet' : `Abo auf diesem PC beendet (YouTube: ${r.error})`);
+    } catch (err) {
+      toast('Abonnieren fehlgeschlagen: ' + cleanError(err));
+    } finally {
+      btn.disabled = false;
+      fillSubscribeButton(btn);
+    }
+  });
+  return btn;
+}
+
+function fillSubscribeButton(btn) {
+  const on = isSubscribed(btn.dataset.sub);
+  btn.className = on ? 'pill ghost sub-btn' : 'pill sub-btn';
+  btn.textContent = on ? 'Abonniert' : 'Abonnieren';
+  btn.title = on ? 'Abo beenden' : 'Kanal abonnieren';
+}
+
+function renderSubButtons() {
+  for (const btn of document.querySelectorAll('[data-sub]')) fillSubscribeButton(btn);
+}
+
+let subsFeedAt = 0;
+
+/** Startseite: "Neu von deinen Abos" mit den Kanälen und ihren neuesten Videos. */
+async function renderSubsShelf() {
+  const shelf = $('shelfSubs');
+  shelf.hidden = state.subs.length === 0;
+  if (!state.subs.length) return;
+  $('subChips').replaceChildren(
+    ...state.subs.slice(0, 30).map((s) => {
+      const chip = el('div', 'sub-chip');
+      chip.title = s.name;
+      const img = el('img');
+      img.loading = 'lazy';
+      if (s.thumbnail) img.src = s.thumbnail;
+      img.alt = '';
+      chip.append(img, el('span', null, s.name || 'Kanal'));
+      chip.addEventListener('click', () => openChannel(s.id, s.name));
+      return chip;
+    }),
+  );
+  const grid = $('subsGrid');
+  // Nicht bei jedem Wechsel auf die Startseite neu laden
+  if (grid.childElementCount && Date.now() - subsFeedAt < 5 * 60 * 1000) return;
+  if (!grid.childElementCount) $('subsHint').textContent = 'Lädt …';
+  try {
+    const videos = await gx.subscriptionFeed();
+    subsFeedAt = Date.now();
+    grid.replaceChildren(...videos.slice(0, 12).map((v) => videoCard(v)));
+    $('subsHint').textContent = videos.length ? '' : 'Noch keine neuen Videos';
+  } catch {
+    $('subsHint').textContent = 'Konnte nicht geladen werden';
+  }
 }
 
 function renderHero() {
@@ -447,8 +609,22 @@ function videoCard(v, { progress = null, historyId = null } = {}) {
   const body = el('div', 'card-body');
   const text = el('div', 'card-text');
   text.append(el('div', 'card-title', v.title || 'Video'));
-  const meta = [v.channelName, v.viewsText, v.publishedText].filter(Boolean).join(' • ');
-  if (meta) text.append(el('div', 'card-meta', meta));
+  // Kanalname führt zur Kanalseite
+  const meta = el('div', 'card-meta');
+  if (v.channelName) {
+    const ch = el('span', v.channelId ? 'card-channel' : null, v.channelName);
+    if (v.channelId) {
+      ch.title = 'Zum Kanal';
+      ch.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openChannel(v.channelId, v.channelName);
+      });
+    }
+    meta.append(ch);
+  }
+  const rest = [v.viewsText, v.publishedText || (v.publishedAt ? relativeTime(v.publishedAt) : '')].filter(Boolean).join(' • ');
+  if (rest) meta.append(document.createTextNode((v.channelName ? ' • ' : '') + rest));
+  if (meta.childNodes.length) text.append(meta);
   const more = el('button', 'icon-btn card-menu');
   more.title = 'Mehr';
   more.append(icon('more'));
@@ -459,6 +635,7 @@ function videoCard(v, { progress = null, historyId = null } = {}) {
       { icon: 'addQueue', label: 'Zur Warteschlange hinzufügen', run: () => gx.add(toRef(v), false) },
       { icon: 'open', label: 'Auf youtube.com öffnen', run: () => gx.openExternal(`https://www.youtube.com/watch?v=${v.id}`) },
     ];
+    if (v.channelId) items.splice(2, 0, { icon: 'account', label: `Zum Kanal${v.channelName ? ` „${v.channelName}“` : ''}`, run: () => openChannel(v.channelId, v.channelName) });
     if (historyId) items.push({ icon: 'delete', label: 'Aus dem Verlauf entfernen', run: async () => { await gx.removeHistory(historyId); renderHome(); } });
     openMenu(more, items);
   });
@@ -478,12 +655,13 @@ function channelCard(c) {
   img.alt = '';
   const text = el('div', 'card-text');
   text.append(el('div', 'card-title', c.name), el('div', 'card-meta', c.subscribersText || 'Kanal'));
-  card.append(img, text);
+  card.append(img, text, subscribeButton({ id: c.id, name: c.name, thumbnail: c.thumbnail }));
+  card.addEventListener('click', () => openChannel(c.id, c.name));
   return card;
 }
 
 function toRef(v) {
-  return { id: v.id, title: v.title ?? '', channelName: v.channelName ?? '', thumbnail: v.thumbnail ?? null, durationSec: v.durationSec ?? -1, isLive: Boolean(v.isLive) };
+  return { id: v.id, title: v.title ?? '', channelName: v.channelName ?? '', channelId: v.channelId ?? null, thumbnail: v.thumbnail ?? null, durationSec: v.durationSec ?? -1, isLive: Boolean(v.isLive) };
 }
 
 function openMenu(anchor, items, { title = null, above = false } = {}) {
@@ -576,6 +754,14 @@ function bindWatch() {
   $('btnPrev').addEventListener('click', () => gx.previous(player.positionMs));
   $('miniPrev').addEventListener('click', () => gx.previous(player.positionMs));
   $('btnBack').addEventListener('click', () => setWatch('mini'));
+  // Kanalname im Player: Video läuft im Mini-Player weiter, die Kanalseite geht auf
+  $('vChannel').addEventListener('click', (e) => {
+    const id = currentChannelId();
+    if (!id || state.watch !== 'full') return;
+    e.stopPropagation();
+    if (state.fullscreen) gx.setFullscreen(false);
+    openChannel(id, state.video?.channelName);
+  });
   $('miniExpand').addEventListener('click', () => setWatch('full'));
   $('miniClose').addEventListener('click', () => gx.stop());
   $('btnFull').addEventListener('click', () => gx.setFullscreen(!state.fullscreen));
@@ -703,10 +889,14 @@ function renderStatus(status) {
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = playing ? 'playing' : status === 'paused' ? 'paused' : 'none';
 }
 
+const currentChannelId = () => state.video?.channelId || (state.details?.id === state.video?.id ? state.details?.channelId : null) || null;
+
 function renderTitle() {
   const v = state.video;
   $('vTitle').textContent = v?.title || '';
   $('vChannel').textContent = v?.channelName || '';
+  $('vChannel').classList.toggle('link', Boolean(currentChannelId()));
+  $('vChannel').title = currentChannelId() ? 'Zum Kanal' : '';
   document.title = v?.title ? `${v.title} – GX Tube` : 'GX Tube';
   renderCastChip();
   updateMediaSession();

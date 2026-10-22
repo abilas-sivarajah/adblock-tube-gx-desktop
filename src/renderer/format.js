@@ -23,6 +23,25 @@ export function qualityLabel(h) {
   return h + 'p';
 }
 
+/** "vor 3 Tagen" usw. für einen Zeitpunkt (ms). */
+export function relativeTime(ms) {
+  const diff = Date.now() - ms;
+  if (!Number.isFinite(diff) || diff < 0) return '';
+  const steps = [
+    [365 * 864e5, 'Jahr', 'Jahren'],
+    [30 * 864e5, 'Monat', 'Monaten'],
+    [7 * 864e5, 'Woche', 'Wochen'],
+    [864e5, 'Tag', 'Tagen'],
+    [36e5, 'Stunde', 'Stunden'],
+    [6e4, 'Minute', 'Minuten'],
+  ];
+  for (const [size, one, many] of steps) {
+    const n = Math.floor(diff / size);
+    if (n >= 1) return `vor ${n} ${n === 1 ? one : many}`;
+  }
+  return 'gerade eben';
+}
+
 /** Element mit Klasse und Text bauen – nie innerHTML mit Daten von außen. */
 export function el(tag, cls, text) {
   const e = document.createElement(tag);

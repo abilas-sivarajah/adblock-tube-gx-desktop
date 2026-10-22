@@ -119,7 +119,27 @@ svg.i { width: 24px; height: 24px; fill: currentColor; display: block; }
 .card-meta { color: var(--text-2); font-size: 13px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card-menu { opacity: 0; width: 36px; height: 36px; margin-right: -8px; }
 .card:hover .card-menu, .card-menu:focus { opacity: 1; }
-.card.channel { display: flex; align-items: center; gap: 16px; grid-column: 1 / -1; cursor: default; }
+.card.channel { display: flex; align-items: center; gap: 16px; grid-column: 1 / -1; }
+.card.channel .card-text { flex: 1; }
+.card-channel { cursor: pointer; }
+.card-channel:hover { color: var(--text); }
+#vChannel.link { display: inline-block; cursor: pointer; }
+#vChannel.link:hover { text-decoration: underline; }
+.channel-head { position: relative; margin: -16px -24px 28px; }
+.channel-banner { display: block; width: 100%; height: 180px; object-fit: cover; background: #181818; }
+.channel-back { position: absolute; top: 12px; left: 12px; background: rgba(0,0,0,.55); }
+.channel-info { display: flex; align-items: center; gap: 24px; padding: 24px 24px 0; }
+.channel-head.no-banner .channel-info { padding-top: 56px; }
+.channel-avatar { flex: none; width: 120px; height: 120px; border-radius: 50%; object-fit: cover; background: #222; }
+.channel-text { flex: 1; min-width: 0; }
+.channel-text h1 { margin: 0 0 6px; font-size: 32px; font-weight: 700; }
+.channel-meta { color: var(--text-2); font-size: 14px; }
+.channel-desc { max-width: 760px; margin: 8px 0 0; overflow: hidden; color: var(--text-2); font-size: 14px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.sub-chips { display: flex; gap: 16px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 16px; }
+.sub-chip { display: flex; flex: none; flex-direction: column; align-items: center; gap: 6px; width: 80px; color: var(--text-2); font-size: 12px; text-align: center; cursor: pointer; }
+.sub-chip:hover { color: var(--text); }
+.sub-chip img { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; background: #222; }
+.sub-chip span { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card.channel img { width: 96px; height: 96px; border-radius: 50%; object-fit: cover; background: #222; }
 
 .menu {

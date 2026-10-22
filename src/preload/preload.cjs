@@ -32,6 +32,11 @@ contextBridge.exposeInMainWorld('gx', {
   report: (state) => ipcRenderer.send('player:report', state),
   ended: (token) => ipcRenderer.send('player:ended', token),
   failed: (info) => ipcRenderer.send('player:failed', info),
+  channel: (id) => ipcRenderer.invoke('yt:channel', id),
+  channelMore: (token) => ipcRenderer.invoke('yt:channelMore', token),
+  subscriptions: () => ipcRenderer.invoke('subs:list'),
+  setSubscribed: (channel, on) => ipcRenderer.invoke('subs:set', channel, on),
+  subscriptionFeed: () => ipcRenderer.invoke('subs:feed'),
   mintPoToken: (binding) => ipcRenderer.invoke('potoken:mint', binding),
   sabrReload: (id, client) => ipcRenderer.invoke('yt:sabrReload', id, client),
 
@@ -66,4 +71,5 @@ contextBridge.exposeInMainWorld('gx', {
   onUpdateStatus: on('update:status'),
   onAccount: on('account'),
   onDeviceLogin: on('account:device'),
+  onSubs: on('subs'),
 });

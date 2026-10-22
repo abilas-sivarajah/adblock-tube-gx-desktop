@@ -64,6 +64,7 @@ gibt nur niedrige Qualität frei oder ein Video ist altersbeschränkt. Dafür gi
 | **Im Hintergrund** | Fenster schließen legt GX Tube in den Infobereich – das Handy findet den PC trotzdem. Optional mit dem Computer starten. |
 | **Updates** | Installierte Windows- und AppImage-Versionen aktualisieren sich selbst |
 | **Google-Konto** | Optional, falls YouTube ohne Anmeldung sperrt (siehe oben) |
+| **Kanäle & Abos** | Kanalname anklicken (an jedem Video und im Player) öffnet die Kanalseite. **Abonnieren** speichert den Kanal auf dem PC – mit Google angemeldet auch bei YouTube; auf der Startseite stehen dann die neuesten Videos deiner Abos |
 
 ### ⌨️ Tastatur (im Player)
 
@@ -106,6 +107,7 @@ npm start               # App starten
 npm test                # Unit-Tests
 npm run smoke           # App starten und wie das Handy fernsteuern (Linux ohne Bildschirm: xvfb-run npm run smoke)
 npm run test:account    # Code fürs Handy, Anmeldefenster und Laden mit Konto durchspielen (ohne echtes Konto)
+npm run test:channel    # Kanalseite, Abonnieren, Abo-Videos auf der Startseite
 npm run dist:win        # Windows-Installer → dist/  (auch dist:linux, dist:mac)
 
 # Fehlersuche: Video wie vom Handy abspielen, abgelehnte Anfragen anzeigen
@@ -144,6 +146,7 @@ src/
 test/                        # Unit-Tests (node --test)
 test-e2e/smoke.mjs           # startet die echte App und steuert sie wie das Handy
 test-e2e/account-test.mjs    # Code fürs Handy, Anmeldefenster, Laden mit Konto, Abmelden
+test-e2e/channel-test.mjs    # Kanalseite, Abonnieren, "Neu von deinen Abos"
 ```
 
 ## 📄 Lizenz
