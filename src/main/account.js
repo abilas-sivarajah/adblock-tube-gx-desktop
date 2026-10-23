@@ -25,9 +25,10 @@ let profileSession = null;
 function ses() {
   if (!profileSession) {
     profileSession = session.fromPartition(PARTITION);
-    // Google lässt Anmeldungen in "eingebetteten Browsern" nicht zu – ohne Electron-Kennung ist es ein normales Chromium
-    const ua = profileSession.getUserAgent().replace(/\s?(Electron|gxtube-desktop|GX ?Tube)\/[\w.-]+/gi, '');
-    profileSession.setUserAgent(ua, 'de-DE,de,en-US,en');
+    // Kennung NICHT verstellen: Google lässt Electron-Apps, die sich ehrlich als solche melden, anmelden
+    // (so macht es auch YouTube Music Desktop). Eine als Chrome getarnte Kennung, zu der die übrigen
+    // Browser-Merkmale nicht passen, lehnt Google ab ("Dieser Browser ist unter Umständen nicht sicher").
+    profileSession.setUserAgent(profileSession.getUserAgent(), 'de-DE,de,en-US,en');
   }
   return profileSession;
 }

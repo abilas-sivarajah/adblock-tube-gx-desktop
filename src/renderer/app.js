@@ -795,8 +795,11 @@ function bindWatch() {
       // Höhere Qualität hat YouTube gerade gesperrt – nicht so tun, als gäbe es sie
       items.push({ note: `Höhere Qualität sperrt YouTube gerade${s.kind === 'progressive' ? ` – läuft als ${qualityLabel(s.maxHeight)}-Datei` : ''}.` });
       if (!state.account?.loggedIn) items.push({ label: 'Mit Google anmelden für bessere Qualität', icon: 'account', run: () => signIn() });
-      // Was jeder YouTube-Zugang geliefert hat – hilft bei der Fehlersuche
-      if (s.attempts?.length) items.push({ note: s.attempts.join('\n'), small: true });
+    }
+    if (s?.client) {
+      // Über welchen Weg das Video kam und was die anderen geliefert haben – hilft bei der Fehlersuche
+      const way = `Geladen über ${s.client}${s.kind === 'sabr' ? '' : s.kind === 'progressive' ? ' (Datei)' : ''}${state.video?.id ? ` · ${state.video.id}` : ''}`;
+      items.push({ note: [way, ...(s.attempts ?? []).filter((a) => !a.startsWith(s.client + ':'))].join('\n'), small: true });
     }
     openMenu($('btnQuality'), items, { title: 'Qualität', above: true });
   });

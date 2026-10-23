@@ -91,6 +91,7 @@ gibt nur niedrige Qualität frei oder ein Video ist altersbeschränkt. Dafür gi
 - Wenn YouTube zu viele Anfragen aus deinem Netz sieht, verlangt es eine Bot-Bestätigung. Dann hilft
   **mit Google anmelden** oder warten. Unter der Fehlermeldung steht, was jeder YouTube-Client geantwortet hat.
 - Lehnt Google die Anmeldung im Fenster ab („Browser nicht sicher“), meldet GX Tube das – dann mit dem Handy anmelden.
+  (Das Anmeldefenster meldet sich bewusst ehrlich als Electron-App; als Chrome getarnt lehnt Google ab.)
 - Sperrt YouTube die höheren Qualitäten, fragt GX Tube die anderen Clients, lädt dann wie der YouTube-Webplayer
   über SABR und nimmt erst zuletzt die beste freigegebene Qualität (notfalls die 360p-Datei). Der Qualitäts-Knopf zeigt immer die echte Auflösung, das
   Qualitäts-Menü sagt dann „Höhere Qualität sperrt YouTube gerade“ – mit Google angemeldet geht es meist wieder in HD.

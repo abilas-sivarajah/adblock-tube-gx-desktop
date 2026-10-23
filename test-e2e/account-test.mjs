@@ -1,6 +1,6 @@
 // Google-Anmeldung durchspielen (ohne echtes Konto):
 // 1. "Mit dem Handy anmelden" holt einen echten Code von Google und zeigt ihn an; Abbrechen schließt
-//    "Hier im Fenster" öffnet Googles Anmeldeseite ohne Electron-Kennung
+//    "Hier im Fenster" öffnet Googles Anmeldeseite (mit unveränderter Electron-Kennung)
 // 2. Mit (unechten) Konto-Cookies und gesperrten anonymen Anfragen wird das Konto benutzt
 // 3. Mit (unechten) Tokens vom Handy ebenso – Google lehnt sie ab → "Anmeldung abgelaufen"
 import { _electron as electron } from 'playwright-core';
@@ -66,7 +66,8 @@ async function openSettings(win) {
   const ua = await login.evaluate(() => navigator.userAgent);
   console.log('[login]', url.slice(0, 80), '|', ua);
   assert.match(url, /^https:\/\/accounts\.google\.com\//);
-  assert.doesNotMatch(ua, /Electron|GX ?Tube|gxtube/i);
+  // Ehrliche Electron-Kennung – eine als Chrome getarnte lehnt Google als "nicht sicher" ab
+  assert.match(ua, /Electron\//);
   await row.locator('button', { hasText: 'Anmeldefenster ist offen' }).waitFor();
   await login.waitForTimeout(3000);
   if (shots) await login.screenshot({ path: path.join(shots, 'google-login.png') });
