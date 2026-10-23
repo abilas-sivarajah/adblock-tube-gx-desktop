@@ -61,6 +61,7 @@ async function boot() {
   state.account = await gx.accountStatus();
   state.subs = await gx.subscriptions();
   $('btnSignIn').addEventListener('click', () => signIn());
+  $('btnSignInWindow').addEventListener('click', () => windowSignIn());
   $('signInDialog').addEventListener('click', (e) => {
     if (e.target === $('signInDialog')) closeSignInDialog();
   });
@@ -80,11 +81,12 @@ async function boot() {
 function bindEvents() {
   gx.onLoading(onLoading);
   gx.onSource(onSource);
-  gx.onError(({ token, message, details, signIn }) => {
+  gx.onError(({ token, message, details, signIn, signInWindow }) => {
     if (token !== state.token) return;
     state.error = message;
     state.errorDetails = Array.isArray(details) ? details : [];
     state.errorSignIn = Boolean(signIn);
+    state.errorSignInWindow = Boolean(signInWindow);
     renderStatus('error');
   });
   gx.onVideo(({ token, video: v }) => {
@@ -157,6 +159,7 @@ function onLoading({ token, video: v }) {
   state.error = null;
   state.errorDetails = [];
   state.errorSignIn = false;
+  state.errorSignInWindow = false;
   state.stream = null;
   state.segments = [];
   player.prepare(token);
@@ -1317,6 +1320,14 @@ function fillAccountRow(row) {
   label.append(el('b', null, title), el('span', null, accountText(a)));
   const buttons = el('div', 'buttons');
   if (a?.loggedIn) {
+    if (a.method === 'device') {
+      // Per Code angemeldet: Die Anmeldung im Fenster lädt wie YouTube im Browser (hilft, wenn Videos scheitern)
+      const here = el('button', 'pill small ghost', signingIn ? 'Anmeldefenster ist offen …' : 'Im Fenster anmelden');
+      here.title = 'Stattdessen über Googles Anmeldeseite hier am PC anmelden – dann lädt GX Tube wie YouTube im Browser';
+      here.disabled = signingIn;
+      here.addEventListener('click', () => windowSignIn());
+      buttons.append(here);
+    }
     const out = el('button', 'pill small ghost', 'Abmelden');
     out.addEventListener('click', async () => {
       state.account = await gx.logout();
@@ -1441,6 +1452,10 @@ function renderSignInDialog() {
 }
 
 function renderSignInButton(status = player.status) {
+  const win = $('btnSignInWindow');
+  win.hidden = !(status === 'error' && state.errorSignInWindow);
+  win.disabled = signingIn;
+  win.textContent = signingIn ? 'Anmeldefenster ist offen …' : 'Im Fenster anmelden';
   const btn = $('btnSignIn');
   btn.hidden = !(status === 'error' && state.errorSignIn && !state.account?.loggedIn);
   btn.disabled = signingIn;

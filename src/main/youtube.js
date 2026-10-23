@@ -26,7 +26,7 @@ export const STREAM_CLIENTS = ['VISIONOS', 'TV_SIMPLY', 'IOS', 'MWEB', 'ANDROID_
 export const ACCOUNT_CLIENTS = ['TV', 'TV_SIMPLY', 'MWEB'];
 // … und diese die Anmeldung per Code (Token von YouTube auf dem Fernseher)
 // (TV_SIMPLY lehnt das Fernseher-Token mit HTTP 400 ab; TV liefert mit Konto oft nur SABR – siehe unten)
-export const DEVICE_CLIENTS = ['TV'];
+export const DEVICE_CLIENTS = ['TV', 'TV_EMBEDDED'];
 const ACCOUNT_PREFIX = 'Konto ';
 const EXPIRED_MESSAGE = 'Google-Anmeldung abgelaufen – bitte in den Einstellungen neu anmelden';
 // Erneuern des Tokens abgelehnt: in Google widerrufen oder abgelaufen
@@ -101,7 +101,31 @@ function accountMethod() {
 }
 
 /** Konto-Client mit der Anmeldung per Code: Innertube mit den Tokens (Bearer), wie YouTube auf dem Fernseher. */
+// YouTube.js kennt die Fernseher-App nur in einer älteren Version; YouTube antwortet darauf mit
+// "Die Seite muss neu geladen werden" bzw. lehnt die SABR-Konfiguration ab. Deshalb die aktuelle
+// Version von youtube.com/tv holen (einmal am Tag).
+let tvVersionCheckedAt = 0;
+export async function refreshTvVersion() {
+  if (Date.now() - tvVersionCheckedAt < 24 * 60 * 60 * 1000) return Constants.CLIENTS.TV.VERSION;
+  tvVersionCheckedAt = Date.now();
+  try {
+    const fetchImpl = options.fetch ?? globalThis.fetch;
+    const res = await fetchImpl('https://www.youtube.com/tv', { headers: { 'User-Agent': Constants.CLIENTS.TV.USER_AGENT, 'Accept-Language': 'de-DE' } });
+    const version = tvVersionFrom(await res.text());
+    if (version) Constants.CLIENTS.TV.VERSION = version;
+  } catch (e) {
+    console.warn('[tv-version]', e?.message ?? e);
+  }
+  return Constants.CLIENTS.TV.VERSION;
+}
+
+/** "7.20261020.14.00" aus der TV-Seite (Testversionen mit "-canary…" zählen nicht). */
+export function tvVersionFrom(html) {
+  return String(html).match(/"(?:INNERTUBE_CLIENT_VERSION|clientVersion)":"(7\.\d{8}\.\d{2}\.\d{2})"/)?.[1] ?? null;
+}
+
 async function createDeviceClient() {
+  await refreshTvVersion();
   const acc = options.account;
   const tokens = acc.deviceTokens?.();
   if (!tokens) throw new AccountError('nicht angemeldet');
@@ -129,6 +153,7 @@ async function createDeviceClient() {
 
 async function createAccountClient() {
   if (accountMethod() === 'device') return createDeviceClient();
+  await refreshTvVersion();
   const acc = options.account;
   const cookie = acc?.loggedIn() ? await acc.cookieHeader() : null;
   if (!cookie) throw new AccountError('nicht angemeldet');
@@ -397,11 +422,12 @@ export async function details(id) {
 }
 
 class StreamError extends Error {
-  constructor(message, reasons, { signIn = false } = {}) {
+  constructor(message, reasons, { signIn = false, signInWindow = false } = {}) {
     super(message);
     this.reasons = reasons;
-    // Würde eine Anmeldung mit Google helfen?
+    // Würde eine Anmeldung mit Google helfen? (signInWindow: die im Fenster statt per Code)
     this.signIn = signIn;
+    this.signInWindow = signInWindow;
   }
 }
 
@@ -644,8 +670,11 @@ async function tryClients(id, group, ctx) {
 // Bei den Web-Clients liefert YouTube darüber auch dann HD, wenn es direkte Adressen nur noch für 360p gibt.
 export const SABR_CLIENTS = process.env.GXTUBE_SABR_CLIENTS ? process.env.GXTUBE_SABR_CLIENTS.split(',') : ['WEB', 'MWEB'];
 // Mit Konto: Der TV-Client kommt auch durch, wenn das Netz anonym als "Bot" gesperrt ist – liefert aber nur SABR
-// (WEB als zweiter Weg, falls SABR über TV bei einem Video im Player scheitert)
-export const ACCOUNT_SABR_CLIENTS = ['TV', 'WEB'];
+// Angemeldet im Fenster (Cookies): zuerst WEB wie YouTube im Browser, dann TV.
+// Angemeldet per Code: nur die Fernseher-Clients – WEB lehnt das Fernseher-Token ab (HTTP 400).
+export const ACCOUNT_SABR_CLIENTS = ['WEB', 'TV'];
+export const DEVICE_SABR_CLIENTS = ['TV', 'TV_EMBEDDED'];
+const accountSabrClients = () => (accountMethod() === 'device' ? DEVICE_SABR_CLIENTS : ACCOUNT_SABR_CLIENTS);
 const SABR_PREFIX = 'SABR ';
 // Lief zuletzt nur SABR in voller Qualität: eine Weile gleich SABR nehmen (spart die vielen Versuche)
 const SABR_FIRST_MS = 60 * 60 * 1000;
@@ -660,7 +689,7 @@ function sabrExcluded(exclude, prefix = '') {
 /** SABR-Clients, die für dieses Video noch nicht gescheitert sind. */
 function sabrNames(exclude, prefix = '') {
   if (process.env.GXTUBE_NO_SABR === '1') return [];
-  return (prefix ? ACCOUNT_SABR_CLIENTS : SABR_CLIENTS).filter((n) => !exclude.includes(prefix + SABR_PREFIX + n));
+  return (prefix ? accountSabrClients() : SABR_CLIENTS).filter((n) => !exclude.includes(prefix + SABR_PREFIX + n));
 }
 
 function clientInfoFor(clientName, yt) {
@@ -755,7 +784,7 @@ export async function sabrReload(id, label, reloadPlaybackContext = null) {
   if (!VIDEO_ID.test(id)) throw new Error('Ungültige Video-ID');
   const withAccount = String(label).startsWith(ACCOUNT_PREFIX);
   const clientName = String(label).replace(ACCOUNT_PREFIX, '').replace(SABR_PREFIX, '');
-  if (!(withAccount ? ACCOUNT_SABR_CLIENTS : SABR_CLIENTS).includes(clientName)) throw new Error('Kein SABR-Client');
+  if (!(withAccount ? accountSabrClients() : SABR_CLIENTS).includes(clientName)) throw new Error('Kein SABR-Client');
   const acc = withAccount ? await accountClient() : null;
   const yt = acc?.yt ?? (await client());
   const po = await poTokensFor(yt, clientName, id, withAccount ? acc.dataSyncId : yt.session.context.client.visitorData);
@@ -905,7 +934,10 @@ export async function stream(id, { maxHeight = 1080, exclude = [], clients = pre
   } else {
     message = 'Video konnte nicht geladen werden: ' + (strip(tried.find((r) => !BOT_REASON.test(r))) || strip(reasons[0]) || 'unbekannter Fehler');
   }
-  throw new StreamError(message, reasons, { signIn });
+  // Per Code angemeldet und auch mit Konto gescheitert: Die Anmeldung im Fenster lädt wie YouTube im Browser
+  const signInWindow = accountMethod() === 'device' && reasons.some((r) => r.startsWith(ACCOUNT_PREFIX));
+  if (signInWindow) message += ' Tipp: Im Fenster anmelden – dann lädt GX Tube wie YouTube im Browser.';
+  throw new StreamError(message, reasons, { signIn, signInWindow });
 }
 
 // ------------------------------------------------------------------ Anmeldung per Code

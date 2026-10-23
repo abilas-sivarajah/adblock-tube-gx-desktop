@@ -351,7 +351,7 @@ async function loadVideo({ video, startMs, exclude = [], fallback = false, notes
     console.warn('Stream-Fehler', err?.reasons ?? err);
     current.error = err?.message ?? 'Video konnte nicht geladen werden';
     playback = { ...playback, status: 'error' };
-    send('player:error', { token, message: current.error, details: Array.isArray(err?.reasons) ? err.reasons : [], signIn: Boolean(err?.signIn) });
+    send('player:error', { token, message: current.error, details: Array.isArray(err?.reasons) ? err.reasons : [], signIn: Boolean(err?.signIn), signInWindow: Boolean(err?.signInWindow) });
     broadcastState();
   }
 }

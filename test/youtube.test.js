@@ -71,7 +71,7 @@ test('Mit Google-Konto gibt es weitere Clients zum Ausweichen', async () => {
   const sabr = yt.ACCOUNT_SABR_CLIENTS.map((c) => 'Konto SABR ' + c);
   assert.equal(yt.clientsLeft(all), yt.ACCOUNT_CLIENTS.length + sabr.length, 'Konto-Clients und SABR mit Konto');
   assert.equal(yt.clientsLeft([...all, ...yt.ACCOUNT_CLIENTS.map((c) => 'Konto ' + c)]), sabr.length);
-  assert.equal(yt.clientsLeft([...all, ...yt.ACCOUNT_CLIENTS.map((c) => 'Konto ' + c), sabr[0]]), sabr.length - 1, 'scheitert SABR über TV, bleibt WEB');
+  assert.equal(yt.clientsLeft([...all, ...yt.ACCOUNT_CLIENTS.map((c) => 'Konto ' + c), sabr[0]]), sabr.length - 1, 'scheitert ein SABR-Weg, bleibt der andere');
   assert.equal(yt.clientsLeft([...all, ...yt.ACCOUNT_CLIENTS.map((c) => 'Konto ' + c), ...sabr]), 0);
   yt.configure({ account: null });
 });
@@ -148,4 +148,11 @@ test('Ungefähres Datum aus "vor 3 Tagen" für den Abo-Feed', async () => {
   assert.equal(approxPublished('Gestreamt vor 2 Stunden', now), now - 2 * 36e5);
   assert.equal(approxPublished('1 year ago', now), now - 31536e6);
   assert.equal(approxPublished('', now), 0);
+});
+
+test('Aktuelle Version der Fernseher-App aus youtube.com/tv', async () => {
+  const { tvVersionFrom } = await import('../src/main/youtube.js');
+  assert.equal(tvVersionFrom('"INNERTUBE_CLIENT_VERSION":"7.20261021.13.00-canary_experiment_7.20261020.14.00","clientVersion":"7.20261020.14.00"'), '7.20261020.14.00');
+  assert.equal(tvVersionFrom('"INNERTUBE_CLIENT_VERSION":"7.20261021.13.00"'), '7.20261021.13.00');
+  assert.equal(tvVersionFrom('nichts'), null);
 });
