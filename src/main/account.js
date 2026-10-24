@@ -65,7 +65,8 @@ export function method() {
 
 // ------------------------------------------------------------------ Code vom Handy (Tokens)
 
-function seal(tokens) {
+/** Tokens verschlüsseln, wenn das Betriebssystem es anbietet (auch für das Twitch-Konto). */
+export function seal(tokens) {
   try {
     if (safeStorage.isEncryptionAvailable()) return { sealed: safeStorage.encryptString(JSON.stringify(tokens)).toString('base64') };
   } catch {
@@ -74,7 +75,7 @@ function seal(tokens) {
   return { plain: tokens };
 }
 
-function unseal(box) {
+export function unseal(box) {
   try {
     if (box?.sealed) return JSON.parse(safeStorage.decryptString(Buffer.from(box.sealed, 'base64')));
     return box?.plain ?? null;

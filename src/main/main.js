@@ -8,10 +8,12 @@ import * as YT from './youtube.js';
 import * as SponsorBlock from './sponsorblock.js';
 import * as PoToken from './potoken.js';
 import * as Account from './account.js';
+import * as TW from './twitch.js';
+import * as TwitchAccount from './twitch-account.js';
 import { CastServer } from './cast-server.js';
 import { Session } from './session.js';
 import { Store, lanAddresses } from './store.js';
-import { sanitizeChannel, sanitizeVideo } from './protocol.js';
+import { isTwitchVideo, sanitizeChannel, sanitizeTwitchChannel, sanitizeVideo } from './protocol.js';
 import { checkForUpdates, installUpdate, setupUpdates, updateStatus } from './updater.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -78,6 +80,13 @@ async function start() {
   });
   YT.client().catch(() => {}); // Player-Skript schon mal laden
 
+  TwitchAccount.init(app.getPath('userData'));
+  TW.configure({
+    fetch: (input, init) => net.fetch(input instanceof URL ? input.toString() : input, init),
+    auth: TwitchAccount.auth,
+    unauthorized: () => twitchExpired(),
+  });
+
   setupMediaHeaders();
   Menu.setApplicationMenu(null);
 
@@ -128,6 +137,9 @@ async function start() {
   setTimeout(() => PoToken.warmUp(), 3000);
   // Abos aus dem YouTube-Konto übernehmen
   setTimeout(() => syncAccountSubscriptions(), 15000);
+  // Twitch-Anmeldung prüfen (verlangt Twitch stündlich) und Gefolgte übernehmen
+  setTimeout(() => checkTwitchLogin().then(() => syncTwitchFollows()), 5000);
+  setInterval(() => checkTwitchLogin(), 60 * 60 * 1000);
 }
 
 app.on('before-quit', () => {
@@ -195,7 +207,7 @@ function createWindow() {
   win.on('moved', () => broadcastState());
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https:\/\/(www\.)?(youtube\.com|youtu\.be|github\.com|sponsor\.ajay\.app)\//.test(url)) shell.openExternal(url);
+    if (/^https:\/\/(www\.)?(youtube\.com|youtu\.be|github\.com|sponsor\.ajay\.app|twitch\.tv)\//.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
 }
@@ -262,11 +274,14 @@ function applyLoginItem() {
 // ------------------------------------------------------------------ Streams
 
 /**
- * YouTube liefert die Video-Daten von googlevideo.com ohne CORS-Freigabe.
- * Für den eingebauten Player geben wir sie hier frei (nur für diese Adressen).
+ * YouTube liefert die Video-Daten von googlevideo.com ohne CORS-Freigabe, Twitch die VODs
+ * (cloudfront.net) ebenso. Für den eingebauten Player geben wir sie hier frei (nur für diese Adressen).
+ * Pro Sitzung gibt es nur einen Empfänger je Ereignis – deshalb alles in einem Filter.
  */
 function setupMediaHeaders() {
-  const filter = { urls: ['https://*.googlevideo.com/*', 'https://*.youtube.com/api/manifest/*'] };
+  const filter = {
+    urls: ['https://*.googlevideo.com/*', 'https://*.youtube.com/api/manifest/*', 'https://*.ttvnw.net/*', 'https://*.cloudfront.net/*'],
+  };
   const ses = electronSession.defaultSession;
   ses.webRequest.onBeforeSendHeaders(filter, (details, callback) => {
     const headers = { ...details.requestHeaders };
@@ -309,6 +324,11 @@ async function loadVideo({ video, startMs, exclude = [], fallback = false, notes
   send('player:loading', { token, video, startMs: resume });
   broadcastState();
   updateTray();
+
+  if (isTwitchVideo(video.id)) {
+    if (previous?.details) send('player:details', { token, details: previous.details });
+    return loadTwitch(token, video, resume, Boolean(previous));
+  }
 
   if (previous) {
     // Gleiches Video mit anderem Client: Bekanntes gleich wieder anzeigen
@@ -354,6 +374,157 @@ async function loadVideo({ video, startMs, exclude = [], fallback = false, notes
     send('player:error', { token, message: current.error, details: Array.isArray(err?.reasons) ? err.reasons : [], signIn: Boolean(err?.signIn), signInWindow: Boolean(err?.signInWindow) });
     broadcastState();
   }
+}
+
+// ------------------------------------------------------------------ Twitch
+
+/**
+ * Twitch-Stream oder -VOD laden: Infos (Titel, Kategorie, Zuschauer) und Wiedergabe-Adresse
+ * gleichzeitig. Die Werbung entfernt der Werbeblocker im Fenster.
+ */
+async function loadTwitch(token, video, resume, again) {
+  await ensureTwitchToken();
+  const [info, play] = await Promise.allSettled([TW.watchInfo(video.id), TW.playback(video.id)]);
+  if (token !== loadToken) return;
+  const failed = info.status === 'rejected' && info.reason?.code === 'offline' ? info.reason : play.status === 'rejected' ? play.reason : null;
+  if (failed) {
+    console.warn('[twitch]', failed?.message ?? failed);
+    current.error = failed?.message ?? 'Stream konnte nicht geladen werden';
+    playback = { ...playback, status: 'error' };
+    send('player:error', { token, message: current.error, details: current.notes ?? [], twitchSignIn: Boolean(failed?.signIn) && !TwitchAccount.loggedIn(), offline: failed?.code === 'offline', channelLogin: video.channelLogin ?? TW.parseId(video.id)?.login ?? null });
+    broadcastState();
+    return;
+  }
+  if (info.status === 'fulfilled') {
+    const i = info.value;
+    updateCurrentVideo({ ...video, title: i.title || video.title, channelName: i.channelName || video.channelName, channelLogin: i.channelLogin || video.channelLogin || null, thumbnail: video.thumbnail || i.thumbnail, durationSec: i.isLive ? -1 : i.durationSec || video.durationSec, isLive: i.isLive });
+    current.details = { twitch: i };
+    send('player:details', { token, details: current.details });
+  }
+  const p = play.value;
+  current.stream = { kind: 'twitch', url: p.url, isLive: p.isLive, login: p.login, vod: p.vod, client: p.account ? 'Twitch (Konto)' : 'Twitch', account: p.account };
+  current.resolvedAt = Date.now();
+  console.info(`[twitch] ${video.id}${p.account ? ' mit Konto' : ''}${again ? ' (neu geladen)' : ''}`);
+  send('player:source', { token, video: current.video, stream: current.stream, startMs: p.isLive ? null : resume, maxQuality: store.settings.maxQuality });
+}
+
+let twitchRefreshing = null;
+
+/** Zugangs-Token kurz vor Ablauf erneuern. */
+async function ensureTwitchToken() {
+  if (!TwitchAccount.loggedIn() || !TwitchAccount.needsRefresh()) return;
+  twitchRefreshing ??= TW.refreshTokens(TwitchAccount.currentTokens())
+    .then((t) => TwitchAccount.updateTokens(t))
+    .catch(() => twitchExpired())
+    .finally(() => {
+      twitchRefreshing = null;
+    });
+  await twitchRefreshing;
+}
+
+/** Beim Start und stündlich: Ist die Twitch-Anmeldung noch gültig? */
+async function checkTwitchLogin() {
+  if (!TwitchAccount.loggedIn()) return;
+  try {
+    const v = await TW.validate(TwitchAccount.currentTokens().access_token);
+    if (v) {
+      if (v.login && v.login !== TwitchAccount.status().login) TwitchAccount.setUser({ login: v.login, id: v.userId });
+      return;
+    }
+    TwitchAccount.updateTokens(await TW.refreshTokens(TwitchAccount.currentTokens()));
+  } catch (err) {
+    if (err?.signIn) twitchExpired();
+  }
+}
+
+function twitchExpired() {
+  if (!TwitchAccount.loggedIn()) return;
+  TwitchAccount.markExpired();
+  send('twitch:account', TwitchAccount.status());
+}
+
+// Anmeldung per Code (twitch.tv/activate): bestätigt auf dem Handy oder im Fenster am PC
+let twitchLogin = null;
+
+async function startTwitchLogin({ inWindow = false } = {}) {
+  if (!twitchLogin) {
+    const flow = await TW.startDeviceLogin();
+    twitchLogin = flow;
+    flow.done
+      .then(async (tokens) => {
+        const v = await TW.validate(tokens.access_token).catch(() => null);
+        const [u] = v?.login ? await TW.users([v.login]).catch(() => []) : [];
+        TwitchAccount.saveLogin(tokens, { id: v?.userId ?? u?.userId ?? null, login: v?.login ?? null, name: u?.name ?? v?.login ?? null, avatar: u?.avatar ?? null });
+        TwitchAccount.closeWindow();
+        send('twitch:login', { state: 'ok' });
+        send('twitch:account', TwitchAccount.status());
+        toast(`Bei Twitch angemeldet${u?.name ? ` als ${u.name}` : ''}`);
+        syncTwitchFollows();
+        // Gerade gescheitert (z. B. nur für Abonnenten)? Gleich nochmal – diesmal mit Konto
+        if (current?.error && isTwitchVideo(current.video.id)) loadVideo({ video: current.video, startMs: playback.positionMs || current.startMs });
+      })
+      .catch((err) => {
+        console.warn('[twitch] Anmeldung:', err?.reason ?? err?.message ?? err);
+        send('twitch:login', { state: err?.reason ?? 'error', message: err?.message ?? String(err) });
+      })
+      .finally(() => {
+        if (twitchLogin === flow) twitchLogin = null;
+      });
+  }
+  if (inWindow) TwitchAccount.openWindow(twitchLogin.activateUrl, win);
+  return { userCode: twitchLogin.userCode, verificationUrl: twitchLogin.verificationUrl, expiresAt: twitchLogin.expiresAt };
+}
+
+async function twitchLogout() {
+  twitchLogin?.cancel();
+  const old = await TwitchAccount.logout();
+  TW.revoke(old).catch(() => {});
+  send('twitch:account', TwitchAccount.status());
+  return TwitchAccount.status();
+}
+
+/** Gefolgte Kanäle aus dem Twitch-Konto übernehmen. */
+async function syncTwitchFollows() {
+  if (!TwitchAccount.loggedIn()) return;
+  try {
+    await ensureTwitchToken();
+    const list = await TW.followedChannels();
+    if (store.mergeFollows(list)) send('twitch:follows', store.twitchFollows);
+  } catch (err) {
+    console.warn('[twitch] Gefolgte:', err?.message ?? err);
+  }
+}
+
+/** Folgen / Entfolgen: auf diesem PC und – angemeldet – auch bei Twitch. */
+async function setTwitchFollow(channel, on) {
+  const c = sanitizeTwitchChannel(channel);
+  let synced = false;
+  let error = null;
+  if (TwitchAccount.loggedIn()) {
+    try {
+      await ensureTwitchToken();
+      if (!c.userId) c.userId = (await TW.users([c.login]))[0]?.userId ?? null;
+      await TW.follow(c.userId, on);
+      synced = true;
+    } catch (err) {
+      error = err?.message ?? String(err);
+      console.warn('[twitch] Folgen:', error);
+    }
+  }
+  store.setFollowing(c, on);
+  send('twitch:follows', store.twitchFollows);
+  return { following: on, synced, error };
+}
+
+/** Gefolgte Kanäle mit Live-Status (live zuerst, nach Zuschauern). */
+async function twitchFollowed() {
+  const list = await TW.users(store.twitchFollows.map((f) => f.login));
+  const byLogin = new Map(list.map((c) => [c.login, c]));
+  // Namen und Bilder auffrischen
+  if (store.mergeFollows(list)) send('twitch:follows', store.twitchFollows);
+  return store.twitchFollows
+    .map((f) => byLogin.get(f.login) ?? { kind: 'channel', platform: 'twitch', login: f.login, userId: f.userId, name: f.name, avatar: f.avatar, live: null })
+    .sort((a, b) => (b.live?.viewers ?? -1) - (a.live?.viewers ?? -1));
 }
 
 // ------------------------------------------------------------------ Google-Konto
@@ -682,6 +853,8 @@ function setupIpc() {
   ipcMain.handle('settings:set', (_e, patch) => {
     const before = store.settings;
     const s = store.updateSettings(patch);
+    if (!['youtube', 'twitch'].includes(s.platform)) s.platform = 'youtube';
+    if (!['de', 'en', ''].includes(s.twitchLanguage)) s.twitchLanguage = 'de';
     if (s.deviceName !== before.deviceName) {
       server?.setName(s.deviceName);
       updateTray();
@@ -760,6 +933,20 @@ function setupIpc() {
   // an derselben Stelle mit dem nächsten YouTube-Client weitermachen.
   ipcMain.on('player:failed', (_e, { token, positionMs, message, http, detail }) => {
     if (!current || token !== current.token) return;
+    if (isTwitchVideo(current.video.id)) {
+      // Twitch: einmal mit frischer Adresse (neue Sitzung) weitermachen, dann aufgeben
+      const notes = [...(current.notes ?? []), `Twitch: im Player gescheitert (${String(detail || message || 'Fehler').slice(0, 160)})`];
+      if (current.attempts < 1) {
+        console.warn(`[twitch] im Player gescheitert (${detail ?? message}) – neu laden`);
+        loadVideo({ video: current.video, startMs: Number(positionMs) || 0, fallback: true, notes });
+        return;
+      }
+      current.error = 'Twitch hat den Stream abgebrochen.';
+      playback = { ...playback, status: 'error' };
+      send('player:error', { token, message: current.error, details: notes });
+      broadcastState();
+      return;
+    }
     const used = current.stream?.client;
     // Für die Details: welcher Weg im Player gescheitert ist und warum
     const notes = [...(current.notes ?? []), `${used ?? 'Stream'}: im Player gescheitert (${String(detail || message || 'Fehler').slice(0, 160)})`];
@@ -792,6 +979,29 @@ function setupIpc() {
   ipcMain.handle('yt:sabrReload', (_e, id, client, reloadContext) =>
     YT.sabrReload(String(id), String(client), reloadContext && typeof reloadContext === 'object' ? reloadContext : null),
   );
+  ipcMain.handle('tw:home', (_e, language) => TW.home({ language: String(language ?? '') }));
+  ipcMain.handle('tw:moreStreams', (_e, language, cursor) => TW.moreStreams({ language: String(language ?? ''), cursor: String(cursor) }));
+  ipcMain.handle('tw:category', (_e, name, language, cursor) => TW.category(String(name), { language: String(language ?? ''), cursor: typeof cursor === 'string' ? cursor : null }));
+  ipcMain.handle('tw:search', (_e, q) => {
+    store.addSearch(q);
+    return TW.search(String(q).slice(0, 200));
+  });
+  ipcMain.handle('tw:channel', (_e, login) => TW.channel(String(login)));
+  ipcMain.handle('tw:channelMore', (_e, login, cursor) => TW.channelMore(String(login), String(cursor)));
+  ipcMain.handle('tw:follows', () => store.twitchFollows);
+  ipcMain.handle('tw:followed', () => twitchFollowed());
+  ipcMain.handle('tw:setFollow', (_e, channel, on) => setTwitchFollow(channel, on === true));
+  ipcMain.handle('twitch:status', () => TwitchAccount.status());
+  ipcMain.handle('twitch:loginStart', (_e, inWindow) => startTwitchLogin({ inWindow: inWindow === true }));
+  ipcMain.on('twitch:loginCancel', () => {
+    twitchLogin?.cancel();
+    TwitchAccount.closeWindow();
+  });
+  ipcMain.handle('twitch:logout', () => twitchLogout());
+  ipcMain.handle('twitch:chatAuth', async () => {
+    await ensureTwitchToken();
+    return TwitchAccount.chatAuth();
+  });
   ipcMain.handle('account:status', () => Account.status());
   ipcMain.handle('account:login', () => login());
   ipcMain.handle('account:logout', () => logout());
@@ -801,6 +1011,6 @@ function setupIpc() {
   ipcMain.handle('update:check', () => checkForUpdates(true));
   ipcMain.handle('update:install', () => installUpdate());
   ipcMain.on('open:external', (_e, url) => {
-    if (typeof url === 'string' && /^https:\/\/(www\.)?(youtube\.com|youtu\.be|github\.com)\//.test(url)) shell.openExternal(url);
+    if (typeof url === 'string' && /^https:\/\/(www\.)?(youtube\.com|youtu\.be|github\.com|twitch\.tv)\//.test(url)) shell.openExternal(url);
   });
 }

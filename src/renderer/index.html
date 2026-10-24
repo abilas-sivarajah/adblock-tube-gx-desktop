@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data: blob:; media-src 'self' blob: data: https:; connect-src 'self' https: blob: data:; font-src 'self' data:; object-src 'none'; base-uri 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data: blob:; media-src 'self' blob: data: https:; connect-src 'self' https: blob: data: wss://irc-ws.chat.twitch.tv; font-src 'self' data:; object-src 'none'; base-uri 'none'">
   <title>GX Tube</title>
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -16,6 +16,10 @@
       </svg>
       <span>GX Tube</span>
     </button>
+    <div id="platformSwitch" class="platform-switch" role="tablist" aria-label="YouTube oder Twitch">
+      <button data-platform="youtube" role="tab" title="YouTube" data-icon="youtube"><span>YouTube</span></button>
+      <button data-platform="twitch" role="tab" title="Twitch" data-icon="twitch"><span>Twitch</span></button>
+    </div>
     <form id="searchForm" autocomplete="off">
       <div class="search-box">
         <input id="searchInput" type="search" placeholder="Suchen" spellcheck="false" maxlength="200">
@@ -60,6 +64,52 @@
       <div id="channelStatus" class="status"></div>
     </section>
 
+    <section id="view-twhome" class="view">
+      <div id="twShelfFollowed" class="shelf" hidden>
+        <div class="shelf-head"><h2>Live – Kanäle, denen du folgst</h2><span class="hint" id="twFollowedHint"></span></div>
+        <div class="grid" id="twFollowedGrid"></div>
+        <div class="sub-chips tw-offline" id="twOfflineChips"></div>
+      </div>
+      <div id="twShelfContinue" class="shelf" hidden>
+        <div class="shelf-head"><h2>Weiter ansehen</h2></div>
+        <div class="row-scroll" id="twContinueRow"></div>
+      </div>
+      <div class="shelf">
+        <div class="shelf-head" id="twPopularHead"></div>
+        <div class="grid" id="twPopularGrid"></div>
+      </div>
+      <div class="shelf">
+        <div class="shelf-head"><h2>Kategorien</h2></div>
+        <div class="tw-games" id="twGamesGrid"></div>
+      </div>
+      <div class="shelf" id="twShelfTop" hidden>
+        <div class="shelf-head"><h2>Weltweit beliebt</h2></div>
+        <div class="grid" id="twTopGrid"></div>
+      </div>
+      <div id="twHomeStatus" class="status"></div>
+    </section>
+
+    <section id="view-twsearch" class="view">
+      <div class="shelf-head" id="twSearchGamesHead" hidden><h2>Kategorien</h2></div>
+      <div class="tw-games tw-games-row" id="twSearchGames"></div>
+      <div class="grid" id="twSearchChannels"></div>
+      <div id="twSearchStatus" class="status"></div>
+    </section>
+
+    <section id="view-twcategory" class="view">
+      <div id="twCategoryHead" class="tw-category-head"></div>
+      <div class="grid" id="twCategoryGrid"></div>
+      <div id="twCategoryStatus" class="status"></div>
+    </section>
+
+    <section id="view-twchannel" class="view">
+      <div id="twChannelHead" class="channel-head"></div>
+      <div id="twChannelLive"></div>
+      <div class="shelf-head" id="twChannelVideosHead" hidden><h2>Vergangene Streams und Videos</h2></div>
+      <div class="grid" id="twChannelGrid"></div>
+      <div id="twChannelStatus" class="status"></div>
+    </section>
+
     <section id="view-settings" class="view">
       <div class="settings" id="settingsForm"></div>
     </section>
@@ -70,11 +120,16 @@
       <video id="video" playsinline></video>
       <div id="cover" class="cover"><img id="coverImg" alt=""><div class="spinner"></div></div>
       <div id="idle" class="idle" hidden></div>
+      <div id="adOverlay" class="ad-overlay" hidden>
+        <div class="ad-card"><span class="ad-dot"></span><div><b>Werbepause</b><p id="adText">GX Tube blendet die Werbung aus – gleich geht's weiter.</p></div></div>
+      </div>
       <div id="errorBox" class="error-box" hidden>
         <p id="errorText"></p>
         <div class="error-actions">
           <button id="btnSignIn" class="pill" hidden>Mit Google anmelden</button>
           <button id="btnSignInWindow" class="pill" hidden>Im Fenster anmelden</button>
+          <button id="btnTwitchSignIn" class="pill" hidden>Bei Twitch anmelden</button>
+          <button id="btnTwitchChannel" class="pill" hidden>Zum Kanal</button>
           <button id="btnRetry" class="pill">Erneut versuchen</button>
         </div>
         <ul id="errorReasons" class="error-reasons" hidden></ul>
@@ -114,6 +169,7 @@
             </label>
             <button id="btnSpeed" class="icon-btn text" title="Geschwindigkeit">1×</button>
             <button id="btnQuality" class="icon-btn text" title="Qualität">HD</button>
+            <button id="btnChat" class="icon-btn" title="Chat (c)" data-icon="chat" hidden></button>
             <button id="btnQueue" class="icon-btn" title="Warteschlange (q)" data-icon="queue"></button>
             <button id="btnFull" class="icon-btn" title="Vollbild (f)" data-icon="fullscreen"></button>
           </div>
@@ -131,6 +187,24 @@
       </div>
       <div id="menu" class="menu" hidden></div>
     </div>
+    <aside id="chatPanel" class="chat-panel" hidden>
+      <div class="queue-head">
+        <div>
+          <h2>Stream-Chat</h2>
+          <p id="chatSub"></p>
+        </div>
+        <button id="btnChatClose" class="icon-btn" data-icon="close" title="Chat schließen (c)"></button>
+      </div>
+      <div id="chatList" class="chat-list"></div>
+      <button id="chatJump" class="pill small chat-jump" hidden>Neue Nachrichten ↓</button>
+      <form id="chatForm" class="chat-form" autocomplete="off">
+        <input id="chatInput" type="text" maxlength="500" placeholder="Nachricht senden" spellcheck="true">
+        <button id="chatSend" type="submit" class="icon-btn" title="Senden" data-icon="send"></button>
+      </form>
+      <div id="chatLogin" class="chat-login" hidden>
+        <button id="chatLoginBtn" class="pill small">Zum Schreiben bei Twitch anmelden</button>
+      </div>
+    </aside>
     <aside id="queuePanel" class="queue-panel" hidden>
       <div class="queue-head">
         <div>
@@ -157,6 +231,15 @@
     </div>
   </div>
 
+  <div id="twitchDialog" class="dialog-backdrop" hidden>
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="twitchTitle">
+      <h2 id="twitchTitle">Bei Twitch anmelden</h2>
+      <div id="twitchBody"></div>
+    </div>
+  </div>
+
+  <!-- Twitch-Werbeblocker (aus Adblock GX): hängt sich in fetch ein – muss vor Shaka laden, das sich fetch beim Laden merkt -->
+  <script src="vendor/twitch-adblock.js"></script>
   <script src="vendor/shaka-player.js"></script>
   <script type="module" src="app.js"></script>
 </body>

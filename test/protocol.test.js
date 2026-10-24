@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ProtocolError, isDiscoveryRequest, isLocalAddress, parseCommand, sanitizeChannel, sanitizeVideo } from '../src/main/protocol.js';
+import { ProtocolError, isDiscoveryRequest, isLocalAddress, parseCommand, sanitizeChannel, sanitizeTwitchChannel, sanitizeVideo } from '../src/main/protocol.js';
 
 test('Video wird geprüft und gekürzt', () => {
   const v = sanitizeVideo({ id: 'dQw4w9WgXcQ', title: 'x'.repeat(500), channelName: 'Rick', thumbnail: 'http://evil/x.png', durationSec: 213.4, extra: 1 });
@@ -57,4 +57,34 @@ test('Vollbild und Bildschirm vom Handy', () => {
   assert.deepEqual(parseCommand({ type: 'display', id: 2528732444 }), { type: 'display', id: 2528732444 });
   assert.throws(() => parseCommand({ type: 'display', id: 'eins' }), ProtocolError);
   assert.throws(() => parseCommand({ type: 'display' }), ProtocolError);
+});
+
+test('Twitch-Streams und -VODs vom Handy', () => {
+  const live = sanitizeVideo({ id: 'twitch:trymacs', title: 'Craft Attack', channelName: 'Trymacs', thumbnail: 'javascript:alert(1)', durationSec: 99 });
+  assert.deepEqual(live, {
+    id: 'twitch:trymacs',
+    platform: 'twitch',
+    title: 'Craft Attack',
+    channelName: 'Trymacs',
+    channelId: null,
+    channelLogin: 'trymacs',
+    thumbnail: 'https://static-cdn.jtvnw.net/previews-ttv/live_user_trymacs-440x248.jpg',
+    durationSec: -1,
+    isLive: true,
+  });
+  const vod = sanitizeVideo({ id: 'twitch-vod:2906596560', channelLogin: 'MontanaBlack88', durationSec: 15270.2 });
+  assert.equal(vod.isLive, false);
+  assert.equal(vod.durationSec, 15270);
+  assert.equal(vod.channelLogin, null, 'nur kleingeschriebene Logins');
+  assert.equal(sanitizeVideo({ id: 'twitch-vod:1', channelLogin: 'montanablack88' }).channelLogin, 'montanablack88');
+  for (const id of ['twitch:', 'twitch:Trymacs', 'twitch:../x', 'twitch-vod:abc', 'twitch:' + 'a'.repeat(26)]) assert.throws(() => sanitizeVideo({ id }), ProtocolError, id);
+  // In der Warteschlange gemischt mit YouTube
+  const play = parseCommand({ type: 'play', video: { id: 'twitch:papaplatte' }, queue: [{ id: 'dQw4w9WgXcQ' }, { id: 'twitch:papaplatte' }] });
+  assert.deepEqual(play.queue.map((v) => v.id), ['dQw4w9WgXcQ', 'twitch:papaplatte']);
+});
+
+test('Twitch-Kanal fürs Folgen wird geprüft', () => {
+  assert.deepEqual(sanitizeTwitchChannel({ login: 'Trymacs', userId: '64342766', name: 'Trymacs', avatar: 'https://static-cdn.jtvnw.net/a.png', extra: 1 }), { login: 'trymacs', userId: '64342766', name: 'Trymacs', avatar: 'https://static-cdn.jtvnw.net/a.png' });
+  assert.equal(sanitizeTwitchChannel({ login: 'x', userId: 'abc' }).userId, null);
+  assert.throws(() => sanitizeTwitchChannel({ login: 'bad login' }), ProtocolError);
 });

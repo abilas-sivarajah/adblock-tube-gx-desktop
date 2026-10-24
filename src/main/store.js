@@ -20,6 +20,9 @@ export const DEFAULT_SETTINGS = {
   openAtLogin: false,
   autoUpdate: true,
   historyEnabled: true,
+  platform: 'youtube', // was beim Start offen ist: 'youtube' oder 'twitch'
+  twitchLanguage: 'de', // beliebte Twitch-Streams: 'de', 'en' oder '' (alle Sprachen)
+  twitchChat: true, // Chat neben Twitch-Streams zeigen
 };
 
 const MAX_HISTORY = 500;
@@ -53,6 +56,8 @@ export class Store {
     this.searchHistory = Array.isArray(lib.searchHistory) ? lib.searchHistory : [];
     // Abos: { id, name, thumbnail, since } – auf diesem PC, mit Google-Konto zusätzlich bei YouTube
     this.subscriptions = Array.isArray(lib.subscriptions) ? lib.subscriptions : [];
+    // Twitch-Kanäle, denen man folgt: { login, userId, name, avatar, since }
+    this.twitchFollows = Array.isArray(lib.twitchFollows) ? lib.twitchFollows : [];
     let dirty = false;
     if (!this.settings.deviceId) {
       this.settings.deviceId = randomUUID();
@@ -95,7 +100,7 @@ export class Store {
 
   saveLibraryNow() {
     clearTimeout(this.libraryTimer);
-    writeJson(this.libraryFile, { history: this.history, recommendations: this.recommendations, searchHistory: this.searchHistory, subscriptions: this.subscriptions });
+    writeJson(this.libraryFile, { history: this.history, recommendations: this.recommendations, searchHistory: this.searchHistory, subscriptions: this.subscriptions, twitchFollows: this.twitchFollows });
   }
 
   historyEntry(id) {
@@ -173,6 +178,40 @@ export class Store {
     }
     if (changed) {
       this.subscriptions = [...known.values()];
+      this.saveLibrarySoon();
+    }
+    return changed;
+  }
+
+  isFollowing(login) {
+    return this.twitchFollows.some((f) => f.login === login);
+  }
+
+  /** Twitch-Kanal folgen bzw. entfolgen (neueste zuerst). */
+  setFollowing(channel, on) {
+    const old = this.twitchFollows.find((f) => f.login === channel.login);
+    const rest = this.twitchFollows.filter((f) => f.login !== channel.login);
+    this.twitchFollows = on ? [{ ...old, ...channel, userId: channel.userId || old?.userId || null, avatar: channel.avatar || old?.avatar || null, since: old?.since ?? Date.now() }, ...rest] : rest;
+    this.saveLibrarySoon();
+    return this.twitchFollows;
+  }
+
+  /** Gefolgte Kanäle aus dem Twitch-Konto dazunehmen (Namen/Bilder werden aufgefrischt). */
+  mergeFollows(list) {
+    const known = new Map(this.twitchFollows.map((f) => [f.login, f]));
+    let changed = false;
+    for (const c of list ?? []) {
+      const old = known.get(c.login);
+      if (!old) {
+        known.set(c.login, { login: c.login, userId: c.userId ?? null, name: c.name || c.login, avatar: c.avatar ?? null, since: c.followedAt ?? Date.now() });
+        changed = true;
+      } else if ((c.name && c.name !== old.name) || (c.avatar && c.avatar !== old.avatar) || (c.userId && c.userId !== old.userId)) {
+        known.set(c.login, { ...old, name: c.name || old.name, avatar: c.avatar || old.avatar, userId: c.userId || old.userId });
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.twitchFollows = [...known.values()];
       this.saveLibrarySoon();
     }
     return changed;

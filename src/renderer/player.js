@@ -60,6 +60,7 @@ export class Player {
     this.shaka = new shaka.Player();
     await this.shaka.attach(this.video);
     this.shaka.getNetworkingEngine().registerRequestFilter((type, request) => this.#filterRequest(request));
+    this.shaka.getNetworkingEngine().registerResponseFilter((type, response) => this.#filterResponse(type, response));
     this.shaka.addEventListener('error', (e) => this.#onShakaError(e.detail));
     this.shaka.addEventListener('adaptation', () => this.onTracks());
     this.shaka.addEventListener('variantchanged', () => this.onTracks());
@@ -130,6 +131,24 @@ export class Player {
     delete request.headers.range;
   }
 
+  /** Twitch: die Variante "nur Ton" weglassen – sonst schaltet die Automatik bei schlechter Leitung aufs schwarze Bild. */
+  #filterResponse(type, response) {
+    if (type !== shaka.net.NetworkingEngine.RequestType.MANIFEST || !/usher\.ttvnw\.net\//.test(response.uri ?? '')) return;
+    const text = new TextDecoder().decode(response.data);
+    if (!text.includes('audio_only')) return;
+    const lines = text.split('\n');
+    const out = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (/^#EXT-X-STREAM-INF:/.test(lines[i]) && /audio_only/.test(lines[i])) {
+        i++; // dazugehörige Adresse auch
+        continue;
+      }
+      if (/^#EXT-X-MEDIA:/.test(lines[i]) && /audio_only/.test(lines[i])) continue;
+      out.push(lines[i]);
+    }
+    response.data = new TextEncoder().encode(out.join('\n')).buffer;
+  }
+
   #setStatus(status) {
     if (this.status === status) return;
     this.status = status;
@@ -191,7 +210,8 @@ export class Player {
     const seq = ++this.loadSeq;
     this.httpErrors = [];
     this.token = token;
-    this.isLive = stream.kind === 'hls';
+    this.kind = stream.kind;
+    this.isLive = stream.kind === 'hls' || (stream.kind === 'twitch' && stream.isLive);
     this.fixedHeight = 0;
     this.maxQuality = maxQuality || 1080;
     this.#configure();
@@ -209,6 +229,11 @@ export class Player {
       } else if (stream.kind === 'dash') {
         const uri = 'data:application/dash+xml;base64,' + btoa(unescape(encodeURIComponent(stream.manifest)));
         await this.shaka.load(uri, startMs ? startMs / 1000 : null, 'application/dash+xml');
+      } else if (stream.kind === 'twitch') {
+        // HLS von Twitch; die Werbung schneidet der Werbeblocker (vendor/twitch-adblock.js) heraus
+        // VODs von vorne (bzw. ab der gemerkten Stelle) – auch das noch wachsende VOD eines laufenden Streams,
+        // das Shaka sonst wie live am Ende beginnen würde
+        await this.shaka.load(stream.url, stream.isLive ? null : (startMs || 0) / 1000, 'application/x-mpegurl');
       } else if (stream.kind === 'progressive') {
         // Eine Datei mit Video und Ton – spielt der Browser selbst ab
         await this.shaka.load(stream.url, startMs ? startMs / 1000 : null, 'video/mp4');
@@ -256,7 +281,7 @@ export class Player {
     this.httpErrors = [];
     console.warn('Player-Fehler', code, status ?? '');
     const message = http
-      ? 'YouTube hat den Stream abgelehnt.'
+      ? `${this.kind === 'twitch' ? 'Twitch' : 'YouTube'} hat den Stream abgelehnt.`
       : code === 3016 || code === 3014 || code === 3015
         ? 'Dieses Videoformat kann nicht abgespielt werden.'
         : `Wiedergabefehler (${code ?? 'unbekannt'})`;
@@ -334,6 +359,17 @@ export class Player {
   qualities() {
     const heights = new Set((this.shaka?.getVariantTracks?.() ?? []).map((t) => t.height).filter(Boolean));
     return [...heights].sort((a, b) => b - a);
+  }
+
+  /** Auflösungen mit Bildrate (Twitch: 1080p60, 720p60 …), absteigend. */
+  variants() {
+    const seen = new Map();
+    for (const t of this.shaka?.getVariantTracks?.() ?? []) {
+      if (!t.height) continue;
+      const old = seen.get(t.height);
+      if (!old || (t.frameRate ?? 0) > (old.frameRate ?? 0)) seen.set(t.height, { height: t.height, frameRate: t.frameRate ?? 0 });
+    }
+    return [...seen.values()].sort((a, b) => b.height - a.height);
   }
 
   currentHeight() {

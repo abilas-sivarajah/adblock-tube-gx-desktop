@@ -315,3 +315,87 @@ body.watching #toasts { bottom: 112px; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: #3a3a3a; border-radius: 5px; border: 2px solid var(--bg); }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ------------------------------------------------------------------ Twitch */
+
+:root { --twitch: #9147ff; --twitch-2: #bf94ff; }
+.platform-switch { display: flex; flex: none; padding: 3px; border-radius: 20px; background: var(--chip); gap: 2px; }
+.platform-switch button { display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px 0 8px; border-radius: 16px; color: var(--text-2); font-weight: 600; font-size: 13px; }
+.platform-switch button svg.i { width: 20px; height: 20px; }
+.platform-switch button:hover { color: var(--text); }
+.platform-switch button.active[data-platform="youtube"] { background: #3a3a3a; color: var(--text); }
+.platform-switch button.active[data-platform="youtube"] svg { fill: var(--red); }
+.platform-switch button.active[data-platform="twitch"] { background: var(--twitch); color: #fff; }
+@media (max-width: 960px) { .platform-switch button span { display: none; } .platform-switch button { padding: 0 8px; } }
+body.platform-twitch #searchInput:focus { border-color: var(--twitch); }
+
+.tw-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.tw-chip { padding: 5px 12px; border-radius: 8px; background: var(--chip); font-size: 13px; font-weight: 500; }
+.tw-chip:hover { background: #3a3a3a; }
+.tw-chip.active { background: var(--text); color: #0f0f0f; }
+#twPopularHead { align-items: center; }
+
+.tw-live { position: absolute; left: 8px; top: 8px; padding: 1px 6px; border-radius: 4px; background: #eb0400; font-size: 12px; font-weight: 700; letter-spacing: .03em; }
+.tw-viewers { position: absolute; left: 8px; bottom: 8px; padding: 1px 6px; border-radius: 4px; background: rgba(0,0,0,.75); font-size: 12px; }
+.thumb img.broken { visibility: hidden; }
+.tw-avatar { flex: none; width: 36px; height: 36px; border-radius: 50%; object-fit: cover; background: #222; cursor: pointer; }
+.tw-game { cursor: pointer; }
+.tw-game:hover { color: var(--twitch-2); }
+.tw-card .card-channel:hover { color: var(--twitch-2); }
+.tw-games { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 20px 14px; }
+.tw-games-row { margin-bottom: 28px; }
+.tw-game-card { cursor: pointer; min-width: 0; }
+.tw-game-card img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 8px; background: #222; transition: transform .15s; }
+.tw-game-card:hover img { transform: translateY(-3px); box-shadow: -4px 4px 0 var(--twitch); }
+.tw-game-name { margin-top: 6px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tw-category-head { display: flex; align-items: center; gap: 20px; margin: 4px 0 28px; }
+.tw-category-art { width: 96px; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 8px; background: #222; flex: none; }
+.tw-category-head h1 { margin: 0 0 4px; font-size: 30px; }
+.tw-category-head .tw-chips { margin: 12px 0 0; }
+.live-ring { outline: 3px solid #eb0400; outline-offset: 2px; }
+.tw-channel-live { max-width: 560px; margin-bottom: 28px; }
+.tw-channel-live h2 { margin: 0 0 12px; font-size: 20px; }
+.tw-follow { display: inline-flex; align-items: center; gap: 6px; }
+.tw-follow svg.i { width: 18px; height: 18px; }
+.tw-follow:not(.ghost) { background: var(--twitch); color: #fff; }
+.tw-channel-row .pill.small { flex: none; }
+.tw-offline { margin-top: 18px; }
+
+/* Werbepause */
+.ad-overlay { position: absolute; inset: 0; z-index: 1; display: grid; place-items: center; background: #000; pointer-events: none; }
+.ad-overlay.small { inset: auto 16px auto auto; top: 76px; background: none; }
+.ad-card { display: flex; align-items: center; gap: 14px; max-width: 460px; padding: 16px 20px; border-radius: 14px; background: rgba(145,71,255,.18); border: 1px solid rgba(191,148,255,.35); }
+.ad-overlay.small .ad-card { padding: 10px 14px; background: rgba(20,20,20,.85); }
+.ad-card b { font-size: 16px; }
+.ad-card p { margin: 2px 0 0; color: #ddd; font-size: 14px; }
+.ad-overlay.small .ad-card b { display: none; }
+.ad-overlay.small .ad-card p { margin: 0; font-size: 13px; }
+.ad-dot { flex: none; width: 12px; height: 12px; border-radius: 50%; background: var(--twitch-2); animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .3; } }
+
+/* Chat */
+.chat-panel { position: relative; width: 340px; flex: none; background: #18181b; border-left: 1px solid #26262c; display: flex; flex-direction: column; overflow: hidden; }
+.watch.mini .chat-panel { display: none !important; }
+.chat-panel .queue-head { border-bottom-color: #26262c; }
+.chat-list { flex: 1; overflow-y: auto; padding: 8px 0; user-select: text; }
+.chat-line { padding: 3px 14px; font-size: 13.5px; line-height: 1.55; overflow-wrap: anywhere; }
+.chat-line:hover { background: rgba(255,255,255,.04); }
+.chat-line.system { color: var(--text-2); font-style: italic; }
+.chat-line.highlight { border-left: 3px solid var(--twitch); background: rgba(145,71,255,.10); }
+.chat-line.mention { background: rgba(235,4,0,.18); }
+.chat-line.deleted .chat-text { color: #777; text-decoration: line-through; }
+.chat-name { font-weight: 700; }
+.chat-badge { display: inline-block; margin-right: 4px; padding: 0 4px; border-radius: 3px; font-size: 10px; font-weight: 800; line-height: 16px; vertical-align: 1px; background: #444; }
+.chat-badge.broadcaster { background: #e91916; }
+.chat-badge.moderator { background: #00ad03; }
+.chat-badge.vip { background: #e005b9; }
+.chat-badge.subscriber { background: var(--twitch); }
+.chat-emote { display: inline-block; height: 28px; width: auto; margin: -5px 1px; vertical-align: middle; }
+.chat-text.action { font-style: italic; }
+.chat-jump { position: absolute; left: 50%; bottom: 72px; transform: translateX(-50%); background: var(--twitch); color: #fff; box-shadow: 0 2px 12px rgba(0,0,0,.5); }
+.chat-form { display: flex; gap: 6px; align-items: center; padding: 10px; border-top: 1px solid #26262c; }
+.chat-form input { flex: 1; min-width: 0; height: 38px; padding: 0 12px; border-radius: 8px; border: 2px solid #3a3a3d; background: #0e0e10; outline: none; }
+.chat-form input:focus { border-color: var(--twitch); }
+.chat-login { padding: 12px; border-top: 1px solid #26262c; text-align: center; }
+.chat-login .pill { background: var(--twitch); color: #fff; }
+.watch.mini .ad-overlay.small { display: none; }

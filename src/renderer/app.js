@@ -2,12 +2,15 @@
 
 import { Player } from './player.js';
 import { hydrateIcons, icon, setIcon } from './icons.js';
-import { duration, durationMs, el, qualityLabel, relativeTime, speedLabel } from './format.js';
+import { count, duration, durationMs, el, qualityLabel, relativeTime, speedLabel } from './format.js';
+import * as Twitch from './twitch-ui.js';
+import { TwitchChat } from './twitch-chat.js';
 
 const gx = window.gx;
 const $ = (id) => document.getElementById(id);
 
 const state = {
+  platform: 'youtube', // youtube | twitch (Umschalter oben links)
   view: 'home',
   watch: 'hidden', // hidden | full | mini
   token: null,
@@ -29,6 +32,8 @@ const state = {
 };
 
 const video = $('video');
+const isTwitch = (v) => typeof v?.id === 'string' && v.id.startsWith('twitch');
+const twitchLive = (v) => isTwitch(v) && v.id.startsWith('twitch:');
 const player = new Player(video, {
   onStatus: (s) => renderStatus(s),
   onSkip: (seg) => toast(`${seg.label} übersprungen`),
@@ -41,9 +46,11 @@ async function boot() {
   hydrateIcons();
   const [settings, info, session] = await Promise.all([gx.settings(), gx.info(), gx.session()]);
   state.settings = settings;
+  state.platform = settings.platform === 'twitch' ? 'twitch' : 'youtube';
   state.info = info;
   state.clients = info.clients;
   state.queue = session;
+  await Twitch.init({ state, toast, showView, setWatch, openMenu, closeMenu, cleanError, onTwitchAccount: () => onTwitchAccount() });
   await player.init({ volume: settings.volume, speed: settings.speed });
   $('volumeSlider').value = String(settings.volume);
   state.fullscreen = await gx.isFullscreen();
@@ -52,9 +59,13 @@ async function boot() {
   bindWatch();
   bindKeys();
   bindEvents();
+  bindChat();
+  bindAdBlock();
 
   renderCastButton();
-  renderHome();
+  renderPlatform();
+  if (state.platform === 'twitch') showView('home');
+  else renderHome();
   renderVolume();
   state.update = await gx.updateStatus();
   renderUpdate();
@@ -81,12 +92,13 @@ async function boot() {
 function bindEvents() {
   gx.onLoading(onLoading);
   gx.onSource(onSource);
-  gx.onError(({ token, message, details, signIn, signInWindow }) => {
+  gx.onError(({ token, message, details, signIn, signInWindow, twitchSignIn, offline, channelLogin }) => {
     if (token !== state.token) return;
     state.error = message;
     state.errorDetails = Array.isArray(details) ? details : [];
     state.errorSignIn = Boolean(signIn);
     state.errorSignInWindow = Boolean(signInWindow);
+    state.errorTwitch = { signIn: Boolean(twitchSignIn), channel: offline && channelLogin ? channelLogin : null };
     renderStatus('error');
   });
   gx.onVideo(({ token, video: v }) => {
@@ -106,8 +118,10 @@ function bindEvents() {
     state.video = null;
     state.details = null;
     player.stop();
+    stopChat();
+    hideAdOverlay();
     setWatch('hidden');
-    renderHome();
+    if (state.view === 'home') renderHome();
   });
   gx.onCommand(onCommand);
   gx.onQueue((q) => {
@@ -162,9 +176,15 @@ function onLoading({ token, video: v }) {
   state.errorSignInWindow = false;
   state.stream = null;
   state.segments = [];
+  state.errorTwitch = null;
+  state.ads = 0;
   player.prepare(token);
   if (state.watch === 'hidden') setWatch('full');
-  $('coverImg').src = v.thumbnail || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`;
+  $('coverImg').src = v.thumbnail || (isTwitch(v) ? '' : `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`);
+  hideAdOverlay();
+  renderTwitchControls();
+  if (twitchLive(v)) startChat(v.channelLogin || v.id.slice(7));
+  else stopChat();
   renderTitle();
   renderSegments();
   renderQueue();
@@ -215,6 +235,7 @@ function onCommand(cmd) {
 
 function bindTopbar() {
   $('btnHome').addEventListener('click', () => showView('home'));
+  for (const b of $('platformSwitch').querySelectorAll('button')) b.addEventListener('click', () => setPlatform(b.dataset.platform));
   $('btnSettings').addEventListener('click', () => showView('settings'));
   $('btnCast').addEventListener('click', (e) => {
     e.stopPropagation();
@@ -238,7 +259,7 @@ function bindTopbar() {
     const q = input.value;
     const seq = ++suggestSeq;
     suggestTimer = setTimeout(async () => {
-      const list = q.trim() ? await gx.suggestions(q) : [];
+      const list = q.trim() && state.platform === 'youtube' ? await gx.suggestions(q) : [];
       // Inzwischen gesucht oder weitergetippt? Dann nicht mehr anzeigen.
       if (seq !== suggestSeq || input.value !== q || document.activeElement !== input) return;
       renderSuggestions(list);
@@ -302,6 +323,7 @@ function renderSuggestions(list, history = false) {
 }
 
 async function runSearch(q) {
+  if (state.platform === 'twitch') return Twitch.search(q);
   if (state.watch === 'full') setWatch('mini');
   showView('search');
   state.search = { query: q, next: null, loading: true };
@@ -354,17 +376,45 @@ function cleanError(err) {
 // ------------------------------------------------------------------ Seiten
 
 function showView(name) {
+  // "Startseite" ist die von YouTube oder Twitch – je nach Umschalter
+  if (name === 'home' && state.platform === 'twitch') name = 'twhome';
   state.view = name;
   for (const v of document.querySelectorAll('.view')) v.classList.toggle('active', v.id === 'view-' + name);
   if (name === 'home') renderHome();
+  if (name === 'twhome') Twitch.renderHome();
   if (name === 'settings') renderSettings();
   if (state.watch === 'full') setWatch('mini');
+}
+
+/** YouTube ↔ Twitch: Startseite und Suche wechseln mit. */
+async function setPlatform(platform) {
+  if (platform !== 'youtube' && platform !== 'twitch') return;
+  if (state.platform !== platform) {
+    state.platform = platform;
+    state.settings = await gx.setSettings({ platform });
+    renderPlatform();
+  }
+  closeMenu();
+  showView('home');
+}
+
+function renderPlatform() {
+  const tw = state.platform === 'twitch';
+  document.body.classList.toggle('platform-twitch', tw);
+  for (const b of $('platformSwitch').querySelectorAll('button')) {
+    const on = b.dataset.platform === state.platform;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', String(on));
+  }
+  $('searchInput').placeholder = tw ? 'Auf Twitch suchen (Kanäle, Kategorien)' : 'Suchen';
+  $('btnHome').title = tw ? 'Twitch-Startseite' : 'Startseite';
 }
 
 async function renderHome() {
   renderHero();
   renderSubsShelf();
   const lib = await gx.library();
+  lib.history = lib.history.filter((h) => !isTwitch(h.video));
   const cont = lib.history.filter((h) => h.durationMs > 0 && h.positionMs > 5000 && h.positionMs < h.durationMs - 15000).slice(0, 20);
   $('shelfContinue').hidden = cont.length === 0;
   $('continueRow').replaceChildren(...cont.map((h) => videoCard(h.video, { progress: h.positionMs / h.durationMs, historyId: h.video.id })));
@@ -763,12 +813,22 @@ function bindWatch() {
     if (!id || state.watch !== 'full') return;
     e.stopPropagation();
     if (state.fullscreen) gx.setFullscreen(false);
-    openChannel(id, state.video?.channelName);
+    if (isTwitch(state.video)) Twitch.openChannel(id, state.video?.channelName);
+    else openChannel(id, state.video?.channelName);
   });
   $('miniExpand').addEventListener('click', () => setWatch('full'));
   $('miniClose').addEventListener('click', () => gx.stop());
   $('btnFull').addEventListener('click', () => gx.setFullscreen(!state.fullscreen));
   $('btnRetry').addEventListener('click', () => gx.retry());
+  $('btnTwitchSignIn').addEventListener('click', () => Twitch.openLoginDialog());
+  $('btnTwitchChannel').addEventListener('click', () => {
+    const login = state.errorTwitch?.channel;
+    if (!login) return;
+    if (state.fullscreen) gx.setFullscreen(false);
+    Twitch.openChannel(login, state.video?.channelName);
+  });
+  $('btnChat').addEventListener('click', () => toggleChat());
+  $('btnChatClose').addEventListener('click', () => toggleChat(false));
   $('btnQueue').addEventListener('click', () => toggleQueue());
   $('btnQueueClose').addEventListener('click', () => toggleQueue(false));
   $('btnQueueClear').addEventListener('click', () => gx.clearUpcoming());
@@ -787,6 +847,7 @@ function bindWatch() {
   });
   $('btnQuality').addEventListener('click', (e) => {
     e.stopPropagation();
+    if (isTwitch(state.video)) return openTwitchQualityMenu();
     const heights = player.qualities();
     const items = [{ label: `Automatisch (bis ${qualityLabel(state.settings.maxQuality)})`, checked: player.fixedHeight === 0, run: () => player.setQuality(0) }];
     for (const h of heights) items.push({ label: qualityLabel(h), checked: player.fixedHeight === h, run: () => player.setQuality(h) });
@@ -858,7 +919,9 @@ function renderTime() {
   const label = $('timeLabel');
   if (!state.video) return;
   if (player.isLive) {
+    const since = isTwitch(state.video) ? state.details?.twitch?.startedAt : null;
     label.replaceChildren(el('span', 'live', 'LIVE'));
+    if (since) label.append(document.createTextNode(` · ${duration((Date.now() - since) / 1000)}`));
   } else {
     const d = player.durationMs || Math.max(0, (state.video.durationSec ?? 0) * 1000);
     label.textContent = d ? `${durationMs(player.positionMs)} / ${durationMs(d)}` : durationMs(player.positionMs);
@@ -890,17 +953,24 @@ function renderStatus(status) {
   $('errorReasons').hidden = reasons.length === 0;
   $('errorReasons').replaceChildren(...reasons.map((r) => el('li', null, r)));
   renderSignInButton(status);
+  $('btnTwitchSignIn').hidden = !(status === 'error' && state.errorTwitch?.signIn && !Twitch.account().loggedIn);
+  $('btnTwitchChannel').hidden = !(status === 'error' && state.errorTwitch?.channel);
+  $('btnRetry').textContent = state.errorTwitch?.channel ? 'Nochmal prüfen' : 'Erneut versuchen';
   if (status === 'paused' || status === 'ended' || status === 'error') $('controls').classList.add('show');
   else showControls();
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = playing ? 'playing' : status === 'paused' ? 'paused' : 'none';
 }
 
-const currentChannelId = () => state.video?.channelId || (state.details?.id === state.video?.id ? state.details?.channelId : null) || null;
+const currentChannelId = () =>
+  isTwitch(state.video)
+    ? state.video.channelLogin || state.details?.twitch?.channelLogin || null
+    : state.video?.channelId || (state.details?.id === state.video?.id ? state.details?.channelId : null) || null;
 
 function renderTitle() {
   const v = state.video;
   $('vTitle').textContent = v?.title || '';
-  $('vChannel').textContent = v?.channelName || '';
+  const t = isTwitch(v) ? state.details?.twitch : null;
+  $('vChannel').textContent = t ? [v.channelName || t.channelName, t.game?.displayName, t.isLive && t.viewers ? `${count(t.viewers)} Zuschauer` : null].filter(Boolean).join(' · ') : v?.channelName || '';
   $('vChannel').classList.toggle('link', Boolean(currentChannelId()));
   $('vChannel').title = currentChannelId() ? 'Zum Kanal' : '';
   document.title = v?.title ? `${v.title} – GX Tube` : 'GX Tube';
@@ -972,6 +1042,7 @@ function toggleQueue(force) {
   const panel = $('queuePanel');
   panel.hidden = force === undefined ? !panel.hidden : !force;
   if (!panel.hidden) {
+    $('chatPanel').hidden = true;
     renderQueue();
     renderRelated();
   }
@@ -987,7 +1058,7 @@ function renderQueue() {
   items.forEach((v, i) => {
     const li = el('li', 'q-item' + (i === index ? ' current' : ''));
     const img = el('img');
-    img.src = v.thumbnail || `https://i.ytimg.com/vi/${v.id}/mqdefault.jpg`;
+    img.src = v.thumbnail || (isTwitch(v) ? '' : `https://i.ytimg.com/vi/${v.id}/mqdefault.jpg`);
     img.alt = '';
     img.loading = 'lazy';
     const text = el('div', 'q-text');
@@ -1044,7 +1115,7 @@ function updateMediaSession() {
   navigator.mediaSession.metadata = new MediaMetadata({
     title: v.title || 'GX Tube',
     artist: v.channelName || '',
-    artwork: [{ src: v.thumbnail || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`, sizes: '480x360' }],
+    artwork: v.thumbnail || !isTwitch(v) ? [{ src: v.thumbnail || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`, sizes: '480x360' }] : [],
   });
 }
 
@@ -1065,6 +1136,10 @@ function bindKeys() {
   document.addEventListener('keydown', (e) => {
     if (!$('signInDialog').hidden) {
       if (e.key === 'Escape') closeSignInDialog();
+      return;
+    }
+    if (Twitch.dialogOpen()) {
+      if (e.key === 'Escape') Twitch.closeLoginDialog();
       return;
     }
     if (e.target.matches('input[type=text], input[type=search], select')) return;
@@ -1089,6 +1164,7 @@ function bindKeys() {
     else if (k === 'm' || k === 'M') player.setMuted(!video.muted);
     else if (k === 'f' || k === 'F') gx.setFullscreen(!state.fullscreen);
     else if (k === 'q' || k === 'Q') toggleQueue();
+    else if ((k === 'c' || k === 'C') && twitchLive(state.video)) toggleChat();
     else if (k === 'N' && e.shiftKey) gx.next();
     else if (k === 'P' && e.shiftKey) gx.previous(player.positionMs);
     else if (k === 'Escape') {
@@ -1196,6 +1272,15 @@ async function renderSettings() {
   f.append(el('h3', null, 'Google-Konto'));
   f.append(accountRow());
 
+  f.append(el('h3', null, 'Twitch'));
+  f.append(Twitch.accountRow());
+  f.append(toggleRow('Chat neben Live-Streams', 'Den Stream-Chat rechts neben dem Video zeigen (mit „c“ ein- und ausblenden)', 'twitchChat'));
+  const adRow = el('div', 'set-row');
+  const adLabel = el('div', 'label');
+  adLabel.append(el('b', null, 'Twitch-Werbeblocker'), el('span', null, 'Aus Adblock GX: holt während Werbepausen den Stream ohne Werbung, sonst zeigt GX Tube kurz ein schwarzes Bild statt der Werbung. Immer an.'));
+  adRow.append(adLabel, el('span', 'chip', 'Aktiv'));
+  f.append(adRow);
+
   f.append(el('h3', null, 'Programm'));
   f.append(toggleRow('Im Hintergrund weiterlaufen', 'Schließen legt GX Tube in den Infobereich – das Handy findet den PC dann weiterhin', 'closeToTray'));
   f.append(toggleRow('Mit dem Computer starten', 'Startet unsichtbar im Infobereich, bereit zum Streamen', 'openAtLogin'));
@@ -1213,7 +1298,7 @@ async function renderSettings() {
   clearRow.append(clearLabel, clearBtn);
   f.append(clearRow);
 
-  const about = el('p', 'hint', `GX Tube Desktop ${info.version} – werbefrei über YouTube.js, nicht mit YouTube oder Google verbunden.`);
+  const about = el('p', 'hint', `GX Tube Desktop ${info.version} – werbefrei über YouTube.js und den Twitch-Werbeblocker von Adblock GX, nicht mit YouTube, Google oder Twitch verbunden.`);
   about.style.marginTop = '24px';
   f.append(about);
 }
@@ -1469,6 +1554,212 @@ function renderAccount() {
   const row = $('accountRow');
   if (row) fillAccountRow(row);
   if (!$('errorBox').hidden) renderSignInButton('error');
+}
+
+// ------------------------------------------------------------------ Twitch im Player
+
+function renderTwitchControls() {
+  const v = state.video;
+  const tw = isTwitch(v);
+  $('btnChat').hidden = !twitchLive(v);
+  document.querySelector('.autoplay-switch').hidden = tw;
+  $('btnSpeed').hidden = tw && v.isLive;
+}
+
+function openTwitchQualityMenu() {
+  const tracks = player.variants();
+  const label = (t) => `${t.height}p${t.frameRate >= 50 ? Math.round(t.frameRate) : ''}`;
+  const items = [{ label: 'Automatisch', checked: player.fixedHeight === 0, run: () => player.setQuality(0) }];
+  for (const t of tracks) items.push({ label: label(t), checked: player.fixedHeight === t.height, run: () => player.setQuality(t.height) });
+  const s = state.stream;
+  const lines = [`Werbeblocker aktiv${state.ads ? ` · ${state.ads} Werbepause${state.ads === 1 ? '' : 'n'} ausgeblendet` : ''}`, `Geladen über ${s?.client ?? 'Twitch'}${state.video?.id ? ` · ${state.video.id.replace(/^twitch(-vod)?:/, '')}` : ''}`];
+  items.push({ note: lines.join('\n'), small: true });
+  openMenu($('btnQuality'), items, { title: 'Qualität', above: true });
+}
+
+// Chat: liest anonym mit, schreibt mit Twitch-Konto
+let chat = null;
+let chatLogin = null;
+let chatStick = true;
+const CHAT_MAX = 250;
+const BADGES = { broadcaster: ['▶', 'Streamer'], moderator: ['MOD', 'Moderator'], vip: ['VIP', 'VIP'], subscriber: ['★', 'Abonnent'] };
+const NAME_COLORS = ['#ff7f50', '#1e90ff', '#9acd32', '#ff69b4', '#daa520', '#5f9ea0', '#00ff7f', '#b22222', '#d2691e', '#8a2be2', '#2e8b57', '#ff4500'];
+
+function bindChat() {
+  chat = new TwitchChat({
+    onMessage: (m) => addChatLine(m),
+    onDelete: ({ id, login }) => {
+      const list = $('chatList');
+      if (!id && !login) {
+        list.replaceChildren(el('div', 'chat-line system', 'Der Chat wurde von einem Moderator geleert.'));
+        return;
+      }
+      for (const line of list.querySelectorAll(id ? `[data-id="${CSS.escape(id)}"]` : `[data-login="${CSS.escape(login)}"]`)) line.classList.add('deleted');
+    },
+    onInfo: (text) => addChatLine({ id: `info-${Date.now()}`, system: true, frags: [{ text }] }),
+    onState: (s) => renderChatState(s),
+    onAuthFailed: () => addChatLine({ id: `auth-${Date.now()}`, system: true, frags: [{ text: 'Twitch hat die Anmeldung für den Chat abgelehnt – du liest weiter mit. Melde dich in den Einstellungen neu bei Twitch an.' }] }),
+  });
+  const list = $('chatList');
+  list.addEventListener('scroll', () => {
+    chatStick = list.scrollTop + list.clientHeight >= list.scrollHeight - 40;
+    if (chatStick) $('chatJump').hidden = true;
+  });
+  $('chatJump').addEventListener('click', () => {
+    list.scrollTop = list.scrollHeight;
+    chatStick = true;
+    $('chatJump').hidden = true;
+  });
+  $('chatForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const input = $('chatInput');
+    if (chat.send(input.value)) {
+      input.value = '';
+      chatStick = true;
+    }
+  });
+  $('chatInput').addEventListener('keydown', (e) => {
+    // Tasten im Chat steuern nicht den Player
+    e.stopPropagation();
+    if (e.key === 'Escape') $('chatInput').blur();
+  });
+  $('chatLoginBtn').addEventListener('click', () => Twitch.openLoginDialog());
+}
+
+async function startChat(login) {
+  if (!login) return;
+  chatLogin = login;
+  $('chatSub').textContent = login;
+  if (chat.channel !== login) $('chatList').replaceChildren(el('div', 'chat-line system', `Willkommen im Chat von ${login}!`));
+  const auth = await gx.twitchChatAuth().catch(() => null);
+  if (chatLogin !== login) return;
+  chat.join(login, auth);
+  renderChatState();
+  if (state.settings?.twitchChat !== false && $('queuePanel').hidden) $('chatPanel').hidden = false;
+}
+
+function stopChat() {
+  chatLogin = null;
+  chat?.close();
+  $('chatPanel').hidden = true;
+}
+
+function toggleChat(force) {
+  if (!twitchLive(state.video)) return;
+  const panel = $('chatPanel');
+  panel.hidden = force === undefined ? !panel.hidden : !force;
+  if (!panel.hidden) {
+    $('queuePanel').hidden = true;
+    const list = $('chatList');
+    list.scrollTop = list.scrollHeight;
+  }
+}
+
+function renderChatState(s) {
+  const loggedIn = Boolean(chat?.auth);
+  $('chatForm').hidden = !loggedIn;
+  $('chatLogin').hidden = loggedIn;
+  if (s === 'connecting' && chatLogin) $('chatSub').textContent = `${chatLogin} · verbinde …`;
+  else if (s === 'open') $('chatSub').textContent = `${chatLogin}${loggedIn ? '' : ' · nur lesen'}`;
+}
+
+function nameColor(color, login) {
+  if (!color) {
+    let h = 0;
+    for (const c of login ?? '') h = (h * 31 + c.charCodeAt(0)) >>> 0;
+    return NAME_COLORS[h % NAME_COLORS.length];
+  }
+  // Zu dunkle Farben auf dem dunklen Hintergrund aufhellen
+  const n = parseInt(color.slice(1), 16);
+  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  if (lum >= 0.4) return color;
+  const mix = (c) => Math.round(c + (255 - c) * 0.45);
+  return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`;
+}
+
+function addChatLine(m) {
+  const list = $('chatList');
+  const line = el('div', 'chat-line' + (m.system ? ' system' : '') + (m.highlight ? ' highlight' : '') + (m.mention ? ' mention' : '') + (m.self ? ' self' : ''));
+  line.dataset.id = m.id;
+  if (m.login) line.dataset.login = m.login;
+  if (!m.system) {
+    for (const b of m.badges ?? []) {
+      const badge = BADGES[b];
+      if (badge) {
+        const span = el('span', `chat-badge ${b}`, badge[0]);
+        span.title = badge[1];
+        line.append(span);
+      }
+    }
+    const name = el('span', 'chat-name', m.name);
+    name.style.color = nameColor(m.color, m.login);
+    line.append(name, document.createTextNode(m.action ? ' ' : ': '));
+  }
+  const body = el('span', m.action ? 'chat-text action' : 'chat-text');
+  for (const f of m.frags ?? []) {
+    if (f.emote) {
+      const img = el('img', 'chat-emote');
+      img.src = f.url;
+      img.alt = f.name;
+      img.title = f.name;
+      body.append(img);
+    } else body.append(document.createTextNode(f.text));
+  }
+  if (m.action && !m.system) body.style.color = nameColor(m.color, m.login);
+  line.append(body);
+  list.append(line);
+  while (list.childElementCount > CHAT_MAX) list.firstElementChild.remove();
+  if (chatStick) list.scrollTop = list.scrollHeight;
+  else $('chatJump').hidden = false;
+}
+
+function onTwitchAccount() {
+  // Neu angemeldet oder abgemeldet: Chat mit dem passenden Zugang neu betreten
+  if (chatLogin) startChat(chatLogin);
+  if (!$('errorBox').hidden) renderStatus('error');
+}
+
+// Werbeblocker: meldet Werbepausen über einen BroadcastChannel
+let adMuted = null;
+
+function bindAdBlock() {
+  let channel;
+  try {
+    channel = new BroadcastChannel('gx-twitch-adblock');
+  } catch {
+    return;
+  }
+  channel.addEventListener('message', (e) => {
+    if (!isTwitch(state.video)) return;
+    const d = e.data ?? {};
+    if (d.event === 'ad-start') state.ads = (state.ads ?? 0) + 1;
+    else if (d.event === 'masked') showAdOverlay(d.hold ? 'GX Tube blendet die Werbung aus – gleich geht\'s weiter.' : 'Werbung läuft im Hintergrund stumm – gleich geht\'s weiter.', !d.hold);
+    else if (d.event === 'unmasked' || d.event === 'ad-end') hideAdOverlay();
+    else if (d.event === 'bridge') {
+      if (d.on) showAdOverlay('Werbepause übersprungen – kurz in niedrigerer Qualität.', false, true);
+      else hideAdOverlay();
+    }
+  });
+}
+
+function showAdOverlay(text, mute, small = false) {
+  const o = $('adOverlay');
+  $('adText').textContent = text;
+  o.classList.toggle('small', small);
+  o.hidden = false;
+  if (mute && adMuted === null) {
+    adMuted = video.muted;
+    video.muted = true;
+  }
+}
+
+function hideAdOverlay() {
+  $('adOverlay').hidden = true;
+  if (adMuted !== null) {
+    video.muted = adMuted;
+    adMuted = null;
+  }
 }
 
 // ------------------------------------------------------------------ Hinweise

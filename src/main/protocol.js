@@ -32,8 +32,32 @@ function imageUrl(value) {
   }
 }
 
+// Twitch: Live-Stream 'twitch:<login>', VOD 'twitch-vod:<id>'
+const TWITCH_LIVE = /^twitch:([a-z0-9_]{1,25})$/;
+const TWITCH_VOD = /^twitch-vod:(\d{1,15})$/;
+const TWITCH_LOGIN = /^[a-z0-9_]{1,25}$/;
+
+export const isTwitchVideo = (id) => typeof id === 'string' && (TWITCH_LIVE.test(id) || TWITCH_VOD.test(id));
+
+function sanitizeTwitch(v) {
+  const live = TWITCH_LIVE.exec(v.id);
+  const login = live ? live[1] : TWITCH_LOGIN.test(v.channelLogin ?? '') ? v.channelLogin : null;
+  return {
+    id: v.id,
+    platform: 'twitch',
+    title: str(v.title, 300),
+    channelName: str(v.channelName, 200),
+    channelId: null,
+    channelLogin: login,
+    thumbnail: imageUrl(v.thumbnail) ?? (live ? `https://static-cdn.jtvnw.net/previews-ttv/live_user_${login}-440x248.jpg` : null),
+    durationSec: live ? -1 : Math.round(num(v.durationSec, -1, 1e7, -1)),
+    isLive: Boolean(live),
+  };
+}
+
 /** Ein Video, wie es Handy und PC austauschen. Unbekannte Felder fallen weg. */
 export function sanitizeVideo(v) {
+  if (v && typeof v === 'object' && isTwitchVideo(v.id)) return sanitizeTwitch(v);
   if (!v || typeof v !== 'object' || !VIDEO_ID.test(v.id ?? '')) throw new ProtocolError('Ungültiges Video');
   return {
     id: v.id,
@@ -44,6 +68,13 @@ export function sanitizeVideo(v) {
     durationSec: Math.round(num(v.durationSec, -1, 1e7, -1)),
     isLive: v.isLive === true,
   };
+}
+
+/** Ein Twitch-Kanal (fürs Folgen). */
+export function sanitizeTwitchChannel(c) {
+  const login = typeof c?.login === 'string' ? c.login.toLowerCase() : '';
+  if (!TWITCH_LOGIN.test(login)) throw new ProtocolError('Ungültiger Kanal');
+  return { login, userId: /^\d{1,20}$/.test(String(c.userId ?? '')) ? String(c.userId) : null, name: str(c.name, 200) || login, avatar: imageUrl(c.avatar) };
 }
 
 /** Ein Kanal (fürs Abonnieren). */

@@ -48,6 +48,11 @@ jobs:
         env:
           SHOTS_DIR: test-e2e/out
         run: mkdir -p test-e2e/out && xvfb-run -a -s "-screen 0 1280x800x24" npm run test:channel
+      - name: Twitch (nur Info)
+        continue-on-error: true
+        env:
+          SHOTS_DIR: test-e2e/out
+        run: mkdir -p test-e2e/out && xvfb-run -a -s "-screen 0 1280x800x24" npm run test:twitch
       - uses: actions/upload-artifact@v4
         if: always()
         with:

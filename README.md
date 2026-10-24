@@ -1,4 +1,4 @@
-# 🖥️ GX Tube Desktop – YouTube ohne Werbung, gesteuert vom Handy
+# 🖥️ GX Tube Desktop – YouTube und Twitch ohne Werbung, gesteuert vom Handy
 
 Desktop-App für Windows, Linux und macOS: ein werbefreier YouTube-Player, den du mit der
 [GX Tube Android-App](https://github.com/abilas-sivarajah/adblock-tube-gx) fernsteuerst –
@@ -6,7 +6,9 @@ so wie die echte YouTube-App einen Fernseher oder die PlayStation steuert.
 Am Handy suchen, tippen, auf dem PC läuft's. Pause, Vorspulen, Lautstärke, Warteschlange: alles vom Sofa.
 
 Wie die Android-App holt GX Tube die Videos **direkt** (über [YouTube.js](https://github.com/LuanRT/YouTube.js)),
-die Werbedaten von YouTube werden gar nicht erst geladen.
+die Werbedaten von YouTube werden gar nicht erst geladen. Oben links schaltest du auf **Twitch** um –
+Live-Streams, VODs und Chat, die Werbung entfernt der Twitch-Werbeblocker aus
+[Adblock GX](https://github.com/abilas-sivarajah/adblock-gx-extension).
 
 ---
 
@@ -51,6 +53,25 @@ gibt nur niedrige Qualität frei oder ein Video ist altersbeschränkt. Dafür gi
 - GX Tube lädt Videos weiter **ohne** Konto. Erst wenn YouTube ablehnt, geht es mit Konto weiter –
   und danach für eine halbe Stunde gleich mit Konto. Videos bleiben werbefrei.
 
+## 🟣 Twitch
+
+Oben links **YouTube | Twitch** umschalten (GX Tube merkt sich die Wahl):
+
+- **Startseite:** Live-Kanäle, denen du folgst, beliebte Streams (Deutsch, Englisch oder alle Sprachen),
+  Kategorien, „Weiter ansehen“ für VODs. Suche nach Kanälen und Kategorien.
+- **Kanalseite:** läuft gerade ein Stream, steht er oben, darunter die vergangenen Streams (VODs). **Folgen**
+  speichert den Kanal auf dem PC – mit Twitch angemeldet auch in deinem Twitch-Konto.
+- **Ohne Werbung:** Der Werbeblocker aus Adblock GX holt während einer Werbepause den Stream über eine
+  zweite, werbefreie Twitch-Sitzung (kurz in 360p, dann wieder in voller Qualität). Findet er keine,
+  zeigt er für die Dauer der Werbung ein schwarzes Bild. Werbung wird nie als „gesehen“ gemeldet.
+- **Chat** rechts neben Live-Streams (mit 7TV-, BTTV- und FFZ-Emotes), mit **c** ein-/ausblenden.
+  Mitlesen geht ohne Konto, **schreiben** mit Twitch-Anmeldung.
+- **Bei Twitch anmelden** (Einstellungen → Twitch): wie die Twitch-App auf dem Fernseher –
+  der PC zeigt einen Code für **twitch.tv/activate** auf dem Handy, oder „Hier im Fenster“ öffnet die Seite
+  mit schon eingetragenem Code. Das Passwort bekommt GX Tube nie; das Token bleibt verschlüsselt auf dem PC.
+- **Vom Handy streamen:** Die Android-App kann Twitch-Streams genauso an den PC schicken wie YouTube-Videos
+  (`twitch:<kanal>` / `twitch-vod:<id>`, siehe [PROTOCOL.md](PROTOCOL.md)).
+
 ## 🌟 Funktionen
 
 | | |
@@ -65,6 +86,7 @@ gibt nur niedrige Qualität frei oder ein Video ist altersbeschränkt. Dafür gi
 | **Updates** | Installierte Windows- und AppImage-Versionen aktualisieren sich selbst |
 | **Google-Konto** | Optional, falls YouTube ohne Anmeldung sperrt (siehe oben) |
 | **Kanäle & Abos** | Kanalname anklicken (an jedem Video und im Player) öffnet die Kanalseite. **Abonnieren** speichert den Kanal auf dem PC – mit Google angemeldet auch bei YouTube; auf der Startseite stehen dann die neuesten Videos deiner Abos |
+| **Twitch** | Live-Streams, VODs, Kategorien, Chat, Folgen, Anmeldung per Code – werbefrei (siehe oben) |
 
 ### ⌨️ Tastatur (im Player)
 
@@ -76,6 +98,7 @@ gibt nur niedrige Qualität frei oder ein Video ist altersbeschränkt. Dafür gi
 | `↑` `↓` | Lautstärke |
 | `M` | Stumm |
 | `F` / Doppelklick | Vollbild |
+| `C` | Twitch-Chat ein/aus |
 | `Q` | Warteschlange |
 | `Shift+N` / `Shift+P` | Nächstes / vorheriges Video |
 | `0`–`9` | An 0 %–90 % springen |
@@ -128,6 +151,7 @@ BLOCK_CLIENT=IOS npm run debug:play -- dQw4w9WgXcQ 60   # simuliert eine YouTube
 | Player | Shaka Player: Video- und Tonspur getrennt als DASH, Live-Streams als HLS |
 | Fernsteuerung | WebSocket (Port 8765) + UDP-Suche (Port 8766), siehe **[PROTOCOL.md](PROTOCOL.md)** |
 | Werbung im Video | SponsorBlock-API (Abfrage über Hash-Präfix, die Video-ID bleibt privat) |
+| Twitch | GraphQL-Abfragen wie twitch.tv (ohne Konto mit der Kennung der Fernseher-App, dort verlangt Twitch beim Weiterblättern keine Integritätsprüfung), HLS über `usher.ttvnw.net`. Werbeblocker: `third_party/adblock-gx/twitch_worker.js` aus Adblock GX (Techniken nach [TTV-AB](https://github.com/GosuDRM/TTV-AB), MIT) hängt sich im Fenster vor Shaka in `fetch` ein und schreibt die Playlisten um. Chat über IRC-WebSocket. Anmeldung: OAuth-Geräteanmeldung (twitch.tv/activate) |
 
 ```
 src/
@@ -139,17 +163,22 @@ src/
 │   ├── youtube.js           # alle YouTube-Abfragen
 │   ├── potoken.js           # PO-Token (BotGuard im unsichtbaren Fenster)
 │   ├── account.js           # optionale Google-Anmeldung
+│   ├── twitch.js            # Twitch-Abfragen, Wiedergabe-Adressen, Anmeldung per Code
+│   ├── twitch-account.js    # Twitch-Konto (Token verschlüsselt, Anmeldefenster)
 │   ├── sponsorblock.js
 │   ├── store.js             # Einstellungen, Verlauf (JSON im Benutzerordner)
 │   └── updater.js           # automatische Updates (GitHub-Releases)
 ├── preload/preload.cjs      # sichere Brücke zum Fenster
 └── renderer/                # Fenster: Startseite, Suche, Player (sabr.js: SABR für Shaka), Einstellungen
+                             #   twitch-ui.js: Twitch-Seiten, twitch-chat.js: Chat
+third_party/adblock-gx/      # Twitch-Werbeblocker aus Adblock GX (scripts/vendor.mjs baut daraus vendor/twitch-adblock.js)
 test/                        # Unit-Tests (node --test)
 test-e2e/smoke.mjs           # startet die echte App und steuert sie wie das Handy
 test-e2e/account-test.mjs    # Code fürs Handy, Anmeldefenster, Laden mit Konto, Abmelden
 test-e2e/channel-test.mjs    # Kanalseite, Abonnieren, "Neu von deinen Abos"
+test-e2e/twitch-test.mjs     # Twitch: Startseite, Live mit Werbeblocker und Chat, Kanal, VOD, vom Handy, Anmeldung
 ```
 
 ## 📄 Lizenz
 
-GPL-3.0 (wie die Android-App). GX Tube ist ein privates Projekt und steht in keiner Verbindung zu YouTube oder Google.
+GPL-3.0 (wie die Android-App). GX Tube ist ein privates Projekt und steht in keiner Verbindung zu YouTube, Google oder Twitch.

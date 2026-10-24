@@ -49,3 +49,11 @@ export function el(tag, cls, text) {
   if (text != null) e.textContent = text;
   return e;
 }
+
+/** "12.345" bzw. "1,2 Mio." für Zuschauer und Follower. */
+export function count(n) {
+  if (!Number.isFinite(n)) return '';
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1).replace('.', ',') + ' Mio.';
+  if (n >= 1e5) return Math.round(n / 1e3) + ' Tsd.';
+  return n.toLocaleString('de-DE');
+}
