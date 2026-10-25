@@ -19,11 +19,13 @@ Platform.shim.eval = async (data, env) => {
  * Reihenfolge der YouTube-Clients für die Streams. Nicht jeder liefert jedes Video,
  * und YouTube sperrt mal den einen, mal den anderen – also der Reihe nach probieren.
  */
-// (Stand Oktober 2026: Web/Mobile Web liefern oft nur noch die 360p-Datei, TV verlangt "Seite neu laden".)
-export const STREAM_CLIENTS = ['VISIONOS', 'TV_SIMPLY', 'IOS', 'MWEB', 'ANDROID_VR'];
+// (Stand Oktober 2026: Web/Mobile Web liefern oft nur noch die 360p-Datei. "TV" meldet sich wie ein
+// Samsung-Fernseher – siehe TV_SAMSUNG – und liefert direkte Adressen bis 4K ohne PO-Token.)
+export const STREAM_CLIENTS = ['TV', 'VISIONOS', 'TV_SIMPLY', 'IOS', 'MWEB', 'ANDROID_VR'];
 
 // Mit Google-Konto: Diese Clients akzeptieren Konto-Cookies (TV braucht kein PO-Token) …
-export const ACCOUNT_CLIENTS = ['TV', 'TV_SIMPLY', 'MWEB'];
+// (TV_SIMPLY nimmt keine Cookies an – HTTP 400)
+export const ACCOUNT_CLIENTS = ['TV', 'MWEB'];
 // … und diese die Anmeldung per Code (Token von YouTube auf dem Fernseher)
 // (TV_SIMPLY lehnt das Fernseher-Token mit HTTP 400 ab; TV liefert mit Konto oft nur SABR – siehe unten)
 export const DEVICE_CLIENTS = ['TV', 'TV_EMBEDDED'];
@@ -35,6 +37,48 @@ const REFRESH_REJECTED = /refresh access token: 4\d\d|invalid_grant|Invalid toke
 // Diese Clients bekommen ein PO-Token (wie YouTube im Browser), wenn eins erzeugt werden kann
 const PO_CLIENTS = new Set(['MWEB', 'WEB']);
 const BOT_REASON = /bot|sign in|anmelden|confirm you/i;
+
+/**
+ * Der Fernseher-Client wie ein Samsung-Fernseher (Tizen) mit der älteren App-Version 5 – so macht es auch
+ * yt-dlp ("tv_samsung"): direkte Adressen bis 4K, kein PO-Token, mit Cookies und mit dem Token der
+ * Anmeldung per Code. Die aktuelle Fernseher-App (Version 7) bekommt "Die Seite muss neu geladen werden".
+ * YouTube.js setzt für "TV" nur Name, Version und userAgent – Gerät, System und den User-Agent der Anfrage
+ * ergänzt tvFetch().
+ */
+export const TV_SAMSUNG = {
+  version: '5.20260707',
+  userAgent: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 2.4.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/2.4.0 TV Safari/538.1',
+  deviceMake: 'Samsung',
+  deviceModel: 'UKS9800',
+  osName: 'Tizen',
+  osVersion: '2.4.0',
+};
+Constants.CLIENTS.TV.VERSION = TV_SAMSUNG.version;
+Constants.CLIENTS.TV.USER_AGENT = TV_SAMSUNG.userAgent;
+
+/** Innertube-Anfragen des Fernseher-Clients (TVHTML5) zu Samsung-Anfragen machen. */
+export function tvFetch(base) {
+  const fetchImpl = base ?? ((...args) => globalThis.fetch(...args));
+  return (input, init = {}) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input?.url ?? '';
+    if (typeof init.body !== 'string' || !url.includes('/youtubei/v1/') || !init.body.includes('"TVHTML5"')) return fetchImpl(input, init);
+    let body;
+    try {
+      body = JSON.parse(init.body);
+    } catch {
+      return fetchImpl(input, init);
+    }
+    const c = body?.context?.client;
+    if (c?.clientName !== 'TVHTML5') return fetchImpl(input, init);
+    Object.assign(c, { clientVersion: TV_SAMSUNG.version, userAgent: TV_SAMSUNG.userAgent, deviceMake: TV_SAMSUNG.deviceMake, deviceModel: TV_SAMSUNG.deviceModel, osName: TV_SAMSUNG.osName, osVersion: TV_SAMSUNG.osVersion });
+    delete c.browserName;
+    delete c.browserVersion;
+    const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined));
+    headers.set('User-Agent', TV_SAMSUNG.userAgent);
+    headers.set('X-Youtube-Client-Version', TV_SAMSUNG.version);
+    return fetchImpl(input, { ...init, headers, body: JSON.stringify(body) });
+  };
+}
 
 export const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
 export const CHANNEL_ID = /^UC[A-Za-z0-9_-]{22}$/;
@@ -68,7 +112,7 @@ export function client() {
       location: options.location,
       retrieve_player: true,
       generate_session_locally: true,
-      fetch: options.fetch,
+      fetch: tvFetch(options.fetch),
       cache: cache(),
     }).catch((e) => {
       clientPromise = null;
@@ -101,31 +145,7 @@ function accountMethod() {
 }
 
 /** Konto-Client mit der Anmeldung per Code: Innertube mit den Tokens (Bearer), wie YouTube auf dem Fernseher. */
-// YouTube.js kennt die Fernseher-App nur in einer älteren Version; YouTube antwortet darauf mit
-// "Die Seite muss neu geladen werden" bzw. lehnt die SABR-Konfiguration ab. Deshalb die aktuelle
-// Version von youtube.com/tv holen (einmal am Tag).
-let tvVersionCheckedAt = 0;
-export async function refreshTvVersion() {
-  if (Date.now() - tvVersionCheckedAt < 24 * 60 * 60 * 1000) return Constants.CLIENTS.TV.VERSION;
-  tvVersionCheckedAt = Date.now();
-  try {
-    const fetchImpl = options.fetch ?? globalThis.fetch;
-    const res = await fetchImpl('https://www.youtube.com/tv', { headers: { 'User-Agent': Constants.CLIENTS.TV.USER_AGENT, 'Accept-Language': 'de-DE' } });
-    const version = tvVersionFrom(await res.text());
-    if (version) Constants.CLIENTS.TV.VERSION = version;
-  } catch (e) {
-    console.warn('[tv-version]', e?.message ?? e);
-  }
-  return Constants.CLIENTS.TV.VERSION;
-}
-
-/** "7.20261020.14.00" aus der TV-Seite (Testversionen mit "-canary…" zählen nicht). */
-export function tvVersionFrom(html) {
-  return String(html).match(/"(?:INNERTUBE_CLIENT_VERSION|clientVersion)":"(7\.\d{8}\.\d{2}\.\d{2})"/)?.[1] ?? null;
-}
-
 async function createDeviceClient() {
-  await refreshTvVersion();
   const acc = options.account;
   const tokens = acc.deviceTokens?.();
   if (!tokens) throw new AccountError('nicht angemeldet');
@@ -135,7 +155,7 @@ async function createDeviceClient() {
     retrieve_player: true,
     generate_session_locally: true,
     enable_session_cache: false,
-    fetch: options.fetch,
+    fetch: tvFetch(options.fetch),
     cache: cache(),
   });
   yt.session.on('update-credentials', ({ credentials }) => acc.onTokens?.({ ...credentials }));
@@ -153,7 +173,6 @@ async function createDeviceClient() {
 
 async function createAccountClient() {
   if (accountMethod() === 'device') return createDeviceClient();
-  await refreshTvVersion();
   const acc = options.account;
   const cookie = acc?.loggedIn() ? await acc.cookieHeader() : null;
   if (!cookie) throw new AccountError('nicht angemeldet');
@@ -177,7 +196,7 @@ async function createAccountClient() {
     enable_session_cache: false,
     visitor_data: cfg.visitorData ?? undefined,
     cookie,
-    fetch: acc.fetch,
+    fetch: tvFetch(acc.fetch),
     cache: cache(),
   });
   return { yt, dataSyncId: cfg.dataSyncId, clients: ACCOUNT_CLIENTS };
@@ -669,10 +688,10 @@ async function tryClients(id, group, ctx) {
 // SABR: So lädt der YouTube-Webplayer – der Player fragt Stück für Stück per POST (siehe renderer/sabr.js).
 // Bei den Web-Clients liefert YouTube darüber auch dann HD, wenn es direkte Adressen nur noch für 360p gibt.
 export const SABR_CLIENTS = process.env.GXTUBE_SABR_CLIENTS ? process.env.GXTUBE_SABR_CLIENTS.split(',') : ['WEB', 'MWEB'];
-// Mit Konto: Der TV-Client kommt auch durch, wenn das Netz anonym als "Bot" gesperrt ist – liefert aber nur SABR
-// Angemeldet im Fenster (Cookies): zuerst WEB wie YouTube im Browser, dann TV.
+// Mit Konto (falls der Fernseher-Client keine direkten Adressen bekommt):
+// Angemeldet im Fenster (Cookies): WEB wie YouTube im Browser.
 // Angemeldet per Code: nur die Fernseher-Clients – WEB lehnt das Fernseher-Token ab (HTTP 400).
-export const ACCOUNT_SABR_CLIENTS = ['WEB', 'TV'];
+export const ACCOUNT_SABR_CLIENTS = ['WEB'];
 export const DEVICE_SABR_CLIENTS = ['TV', 'TV_EMBEDDED'];
 const accountSabrClients = () => (accountMethod() === 'device' ? DEVICE_SABR_CLIENTS : ACCOUNT_SABR_CLIENTS);
 const SABR_PREFIX = 'SABR ';

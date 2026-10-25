@@ -150,9 +150,27 @@ test('Ungefähres Datum aus "vor 3 Tagen" für den Abo-Feed', async () => {
   assert.equal(approxPublished('', now), 0);
 });
 
-test('Aktuelle Version der Fernseher-App aus youtube.com/tv', async () => {
-  const { tvVersionFrom } = await import('../src/main/youtube.js');
-  assert.equal(tvVersionFrom('"INNERTUBE_CLIENT_VERSION":"7.20261021.13.00-canary_experiment_7.20261020.14.00","clientVersion":"7.20261020.14.00"'), '7.20261020.14.00');
-  assert.equal(tvVersionFrom('"INNERTUBE_CLIENT_VERSION":"7.20261021.13.00"'), '7.20261021.13.00');
-  assert.equal(tvVersionFrom('nichts'), null);
+test('Fernseher-Client meldet sich wie ein Samsung-Fernseher', async () => {
+  const { tvFetch, TV_SAMSUNG } = await import('../src/main/youtube.js');
+  const calls = [];
+  const f = tvFetch(async (input, init) => {
+    calls.push({ input, init });
+    return new Response('{}');
+  });
+  const headers = new Headers({ 'User-Agent': 'Electron', 'X-Youtube-Client-Version': '7.1' });
+  const tv = JSON.stringify({ videoId: 'x', context: { client: { clientName: 'TVHTML5', clientVersion: '7.1', browserName: 'Chrome' } } });
+  await f(new Request('https://www.youtube.com/youtubei/v1/player'), { method: 'POST', body: tv, headers });
+  const sent = JSON.parse(calls[0].init.body).context.client;
+  assert.equal(sent.clientVersion, TV_SAMSUNG.version);
+  assert.equal(sent.deviceMake, 'Samsung');
+  assert.equal(sent.osName, 'Tizen');
+  assert.equal(sent.browserName, undefined);
+  assert.equal(calls[0].init.headers.get('User-Agent'), TV_SAMSUNG.userAgent);
+  assert.equal(calls[0].init.headers.get('X-Youtube-Client-Version'), TV_SAMSUNG.version);
+  // Andere Clients und andere Adressen bleiben unverändert
+  const web = JSON.stringify({ context: { client: { clientName: 'WEB', clientVersion: '2.1' } } });
+  await f('https://www.youtube.com/youtubei/v1/player', { body: web });
+  assert.equal(calls[1].init.body, web);
+  await f('https://rr1---sn.googlevideo.com/videoplayback', { body: tv });
+  assert.equal(calls[2].init.body, tv);
 });

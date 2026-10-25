@@ -10,6 +10,12 @@ const REPORT_EVERY_MS = 1000;
 /** Kurzer Grund für die Details ("HTTP 403", "Server streaming error, Schutzstatus 3" …). */
 function errorDetail(err) {
   const code = err?.code;
+  // Fehler in einem Anfrage-/Antwort-Filter (z. B. SABR): der eigentliche Grund steckt darin
+  if (code === 1006 || code === 1007) {
+    const inner = err.data?.[0];
+    const why = inner?.code !== undefined && inner?.severity !== undefined ? errorDetail(inner) : inner?.message ?? String(inner ?? '');
+    return `${code === 1006 ? 'Anfrage' : 'Antwort'} nicht verarbeitet: ${why || 'unbekannt'}`.slice(0, 200);
+  }
   if (code === 1001) return `HTTP ${err.data?.[1] ?? '?'}`;
   if (code === 1002) {
     const first = typeof err.data?.[0] === 'string' && !/^(https?|sabr):/.test(err.data[0]) ? err.data[0] : '';
