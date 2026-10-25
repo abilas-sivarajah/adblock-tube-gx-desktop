@@ -12,8 +12,12 @@ function errorDetail(err) {
   const code = err?.code;
   // Fehler in einem Anfrage-/Antwort-Filter (z. B. SABR): der eigentliche Grund steckt darin
   if (code === 1006 || code === 1007) {
-    const inner = err.data?.[0];
-    const why = inner?.code !== undefined && inner?.severity !== undefined ? errorDetail(inner) : inner?.message ?? String(inner ?? '');
+    // Shaka verschachtelt Filter-Fehler manchmal doppelt
+    let inner = err.data?.[0];
+    while ((inner?.code === 1006 || inner?.code === 1007) && inner.data?.[0]) inner = inner.data[0];
+    const why = inner?.code !== undefined && inner?.severity !== undefined
+      ? errorDetail(inner)
+      : String(inner?.message ?? inner ?? '').replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
     return `${code === 1006 ? 'Anfrage' : 'Antwort'} nicht verarbeitet: ${why || 'unbekannt'}`.slice(0, 200);
   }
   if (code === 1001) return `HTTP ${err.data?.[1] ?? '?'}`;

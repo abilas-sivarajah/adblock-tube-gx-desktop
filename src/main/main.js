@@ -287,6 +287,9 @@ function setupMediaHeaders() {
     const headers = { ...details.requestHeaders };
     delete headers.Origin;
     delete headers.Referer;
+    // Video-Stücke mit der Kennung des Clients, der sie angefordert hat (wie die Android-App)
+    const ua = details.url.includes('.googlevideo.com/') ? YT.streamUserAgent(details.url) : null;
+    if (ua) headers['User-Agent'] = ua;
     callback({ requestHeaders: headers });
   });
   ses.webRequest.onHeadersReceived(filter, (details, callback) => {

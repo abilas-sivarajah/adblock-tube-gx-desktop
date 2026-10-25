@@ -56,6 +56,34 @@ export const TV_SAMSUNG = {
 Constants.CLIENTS.TV.VERSION = TV_SAMSUNG.version;
 Constants.CLIENTS.TV.USER_AGENT = TV_SAMSUNG.userAgent;
 
+// Vision Pro wie in der Android-App (NewPipe Extractor): neuere App-Version, und die Video-Stücke mit der
+// Kennung der YouTube-App laden
+Constants.CLIENTS.VISIONOS.VERSION = '1.04';
+Constants.CLIENTS.VISIONOS.OS_VERSION = '26.6.0.23O770';
+const VISIONOS_APP_UA = 'com.google.visionos.youtube/1.04(RealityDevice17,1; U; CPU visionOS 26_6_0 like Mac OS X; de_DE)';
+
+/** Kennung, mit der die Video-Stücke eines Clients geladen werden (null: egal). */
+export function streamUserAgent(url) {
+  let c = null;
+  try {
+    c = new URL(url).searchParams.get('c');
+  } catch {
+    return null;
+  }
+  switch (c) {
+    case 'VISIONOS':
+      return VISIONOS_APP_UA;
+    case 'IOS':
+      return Constants.CLIENTS.IOS.USER_AGENT;
+    case 'ANDROID_VR':
+      return Constants.CLIENTS.ANDROID_VR.USER_AGENT;
+    case 'TVHTML5':
+      return TV_SAMSUNG.userAgent;
+    default:
+      return null;
+  }
+}
+
 /** Innertube-Anfragen des Fernseher-Clients (TVHTML5) zu Samsung-Anfragen machen. */
 export function tvFetch(base) {
   const fetchImpl = base ?? ((...args) => globalThis.fetch(...args));
@@ -111,7 +139,11 @@ export function client() {
       lang: options.lang,
       location: options.location,
       retrieve_player: true,
-      generate_session_locally: true,
+      // Echte Besucher-ID von YouTube holen (wie die Android-App): Mit einer selbst erzeugten verlangt
+      // YouTube bei vielen Videos "Melde dich an, damit wir sehen, dass du kein Bot bist"
+      generate_session_locally: false,
+      // Bei jedem Start neu holen: Gespeicherte Sitzungen älterer Versionen haben noch die selbst erzeugte
+      enable_session_cache: false,
       fetch: tvFetch(options.fetch),
       cache: cache(),
     }).catch((e) => {
@@ -153,7 +185,7 @@ async function createDeviceClient() {
     lang: options.lang,
     location: options.location,
     retrieve_player: true,
-    generate_session_locally: true,
+    generate_session_locally: false,
     enable_session_cache: false,
     fetch: tvFetch(options.fetch),
     cache: cache(),
@@ -192,7 +224,8 @@ async function createAccountClient() {
     lang: options.lang,
     location: options.location,
     retrieve_player: true,
-    generate_session_locally: true,
+    // Besucher-ID von der YouTube-Startseite mit Konto – fehlt sie, von YouTube holen statt erfinden
+    generate_session_locally: Boolean(cfg.visitorData),
     enable_session_cache: false,
     visitor_data: cfg.visitorData ?? undefined,
     cookie,
@@ -454,7 +487,8 @@ class StreamError extends Error {
 async function urlWorks(url, fetchImpl, offset = 0) {
   try {
     const start = Math.max(0, Math.floor(offset));
-    const r = await fetchImpl(url + (url.includes('?') ? '&' : '?') + `range=${start}-${start + 1023}`, { method: 'GET' });
+    const ua = streamUserAgent(url);
+    const r = await fetchImpl(url + (url.includes('?') ? '&' : '?') + `range=${start}-${start + 1023}`, { method: 'GET', ...(ua ? { headers: { 'User-Agent': ua } } : {}) });
     await r.arrayBuffer().catch(() => {});
     return r.ok;
   } catch {
@@ -821,7 +855,10 @@ export async function sabrReload(id, label, reloadPlaybackContext = null) {
   });
   const raw = res.data?.streamingData?.serverAbrStreamingUrl;
   const ustreamerConfig = res.data?.playerConfig?.mediaCommonConfig?.mediaUstreamerRequestConfig?.videoPlaybackUstreamerConfig;
-  if (!raw || !ustreamerConfig) throw new Error('YouTube hat keine neuen SABR-Daten geschickt');
+  if (!raw || !ustreamerConfig) {
+    const ps = res.data?.playabilityStatus;
+    throw new Error(`YouTube hat keine neuen SABR-Daten geschickt${ps?.status && ps.status !== 'OK' ? ` (${ps.reason || ps.status})` : ''}`);
+  }
   return { url: await yt.session.player.decipher(raw), ustreamerConfig };
 }
 
