@@ -63,6 +63,7 @@ contextBridge.exposeInMainWorld('gx', {
   twitchFollows: () => ipcRenderer.invoke('tw:follows'),
   twitchFollowed: () => ipcRenderer.invoke('tw:followed'),
   twitchSetFollow: (channel, on) => ipcRenderer.invoke('tw:setFollow', channel, on),
+  twitchSyncFollows: () => ipcRenderer.invoke('tw:syncFollows'),
   twitchStatus: () => ipcRenderer.invoke('twitch:status'),
   twitchLoginStart: (inWindow) => ipcRenderer.invoke('twitch:loginStart', inWindow),
   twitchLoginCancel: () => ipcRenderer.send('twitch:loginCancel'),

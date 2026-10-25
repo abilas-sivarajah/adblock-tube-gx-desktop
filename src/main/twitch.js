@@ -379,8 +379,59 @@ export async function currentUser() {
   return { id: u.id, login: u.login.toLowerCase(), name: u.displayName || u.login, avatar: u.profileImageURL ?? null };
 }
 
-/** Kanäle, denen das Konto folgt (bis zu [limit]). */
-export async function followedChannels(limit = 300) {
+/**
+ * Kanäle, denen das Konto folgt: über die offizielle Twitch-API (Berechtigung "user:read:follows"),
+ * sonst über GraphQL. [userId]: das angemeldete Konto.
+ */
+export async function followedChannels(userId) {
+  let helixError = null;
+  if (userId) {
+    try {
+      return await followedHelix(userId);
+    } catch (err) {
+      if (err.code === 401) throw err;
+      helixError = err;
+    }
+  }
+  let list;
+  try {
+    list = await followedGql();
+  } catch (err) {
+    throw helixError ?? err;
+  }
+  // GraphQL kennt das Konto nicht (currentUser leer) – dann lieber den Fehler der offiziellen API melden
+  if (!list.length && helixError) throw helixError;
+  return list;
+}
+
+/** Gefolgte über Helix: GET /helix/channels/followed (Bilder und Live-Status kommen danach über users()). */
+export async function followedHelix(userId, limit = 2000) {
+  const account = authImpl();
+  if (!account) throw new TwitchError('Nicht bei Twitch angemeldet', { signIn: true });
+  const out = [];
+  let after = null;
+  while (out.length < limit) {
+    const url = `https://api.twitch.tv/helix/channels/followed?user_id=${encodeURIComponent(userId)}&first=100${after ? `&after=${encodeURIComponent(after)}` : ''}`;
+    const res = await fetchImpl(url, { headers: { 'Client-Id': account.clientId, Authorization: `Bearer ${account.token}` } });
+    const j = await res.json().catch(() => null);
+    if (res.status === 401) {
+      // Fehlende Berechtigung heißt nicht, dass die Anmeldung abgelaufen ist
+      if (/scope/i.test(j?.message ?? '')) throw new TwitchError(`Twitch erlaubt das Lesen der gefolgten Kanäle nicht (${j.message})`, { code: 'scope', signIn: true });
+      onUnauthorized();
+      throw new TwitchError('Twitch-Anmeldung abgelaufen', { code: 401, signIn: true });
+    }
+    if (!res.ok || !j) throw new TwitchError(`Twitch-API: HTTP ${res.status} ${j?.message ?? ''}`.trim(), { code: res.status });
+    for (const f of j.data ?? []) {
+      const login = String(f.broadcaster_login ?? '').toLowerCase();
+      if (LOGIN.test(login)) out.push({ kind: 'channel', platform: 'twitch', login, userId: f.broadcaster_id ?? null, name: f.broadcaster_name || login, avatar: null, followers: null, live: null, followedAt: ms(f.followed_at) });
+    }
+    after = j.pagination?.cursor ?? null;
+    if (!after) break;
+  }
+  return out;
+}
+
+async function followedGql(limit = 300) {
   const out = [];
   let after = null;
   while (out.length < limit) {

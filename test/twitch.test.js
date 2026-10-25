@@ -111,3 +111,40 @@ test('Chat: Emotes von Twitch und 7TV/BTTV/FFZ', () => {
   // Kaputte Positionen werden ignoriert
   assert.deepEqual(fragments('hi', '25:5-9'), [{ text: 'hi' }]);
 });
+
+test('Gefolgte über die offizielle Twitch-API (mit Weiterblättern)', async () => {
+  const seen = [];
+  let expired = 0;
+  TW.configure({
+    fetch: async (url, init) => {
+      seen.push({ url, headers: init?.headers });
+      const after = new URL(url).searchParams.get('after');
+      const page = after
+        ? { data: [{ broadcaster_id: '2', broadcaster_login: 'papaplatte', broadcaster_name: 'Papaplatte', followed_at: '2024-01-01T00:00:00Z' }], pagination: {} }
+        : { total: 2, data: [{ broadcaster_id: '1', broadcaster_login: 'TryMacs', broadcaster_name: 'Trymacs', followed_at: '2023-01-01T00:00:00Z' }], pagination: { cursor: 'abc' } };
+      return new Response(JSON.stringify(page), { status: 200 });
+    },
+    auth: () => ({ token: 'tok', clientId: TW.TV_CLIENT }),
+    unauthorized: () => expired++,
+  });
+  const list = await TW.followedChannels('42');
+  assert.deepEqual(list.map((c) => [c.login, c.userId, c.name]), [['trymacs', '1', 'Trymacs'], ['papaplatte', '2', 'Papaplatte']]);
+  assert.equal(seen.length, 2);
+  assert.match(seen[0].url, /^https:\/\/api\.twitch\.tv\/helix\/channels\/followed\?user_id=42&first=100$/);
+  assert.match(seen[1].url, /after=abc/);
+  assert.equal(seen[0].headers['Client-Id'], TW.TV_CLIENT);
+  assert.equal(seen[0].headers.Authorization, 'Bearer tok');
+
+  // Fehlende Berechtigung: verständlicher Fehler, Anmeldung bleibt gültig
+  TW.configure({
+    fetch: async (url) =>
+      url.includes('/helix/')
+        ? new Response(JSON.stringify({ error: 'Unauthorized', status: 401, message: 'Missing scope: user:read:follows' }), { status: 401 })
+        : new Response(JSON.stringify({ data: { currentUser: null } }), { status: 200 }),
+    auth: () => ({ token: 'tok', clientId: TW.TV_CLIENT }),
+    unauthorized: () => expired++,
+  });
+  await assert.rejects(TW.followedChannels('42'), /Berechtigung|Lesen der gefolgten/);
+  assert.equal(expired, 0);
+  TW.configure({ fetch: (...a) => fetch(...a), auth: () => null, unauthorized: () => {} });
+});

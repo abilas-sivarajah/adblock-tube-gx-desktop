@@ -555,6 +555,14 @@ function fillAccountRow(row) {
   label.append(el('b', null, a?.loggedIn ? `Angemeldet als ${a.name || a.login}` : a?.expired ? 'Anmeldung abgelaufen' : 'Nicht angemeldet'), el('span', null, accountText(a)));
   const buttons = el('div', 'buttons');
   if (a?.loggedIn) {
+    const sync = el('button', 'pill small ghost', 'Gefolgte neu laden');
+    sync.title = 'Die Kanäle, denen du bei Twitch folgst, hierher übernehmen';
+    sync.addEventListener('click', async () => {
+      sync.disabled = true;
+      await gx.twitchSyncFollows().catch(() => {});
+      sync.disabled = false;
+    });
+    buttons.append(sync);
     const out = el('button', 'pill small ghost', 'Abmelden');
     out.addEventListener('click', async () => {
       tw.account = await gx.twitchLogout();

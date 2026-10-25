@@ -459,7 +459,7 @@ async function startTwitchLogin({ inWindow = false } = {}) {
         send('twitch:login', { state: 'ok' });
         send('twitch:account', TwitchAccount.status());
         toast(`Bei Twitch angemeldet${u?.name ? ` als ${u.name}` : ''}`);
-        syncTwitchFollows();
+        syncTwitchFollows({ report: true });
         // Gerade gescheitert (z. B. nur für Abonnenten)? Gleich nochmal – diesmal mit Konto
         if (current?.error && isTwitchVideo(current.video.id)) loadVideo({ video: current.video, startMs: playback.positionMs || current.startMs });
       })
@@ -483,15 +483,24 @@ async function twitchLogout() {
   return TwitchAccount.status();
 }
 
-/** Gefolgte Kanäle aus dem Twitch-Konto übernehmen. */
-async function syncTwitchFollows() {
+/** Gefolgte Kanäle aus dem Twitch-Konto übernehmen. [report]: Fehler als Hinweis zeigen. */
+async function syncTwitchFollows({ report = false } = {}) {
   if (!TwitchAccount.loggedIn()) return;
   try {
     await ensureTwitchToken();
-    const list = await TW.followedChannels();
+    let userId = TwitchAccount.status().userId;
+    if (!userId) {
+      // Konto-Nummer fehlt: bei Twitch nachfragen
+      userId = (await TW.validate(TwitchAccount.currentTokens().access_token).catch(() => null))?.userId ?? null;
+      if (userId) TwitchAccount.setUser({ id: userId });
+    }
+    const list = await TW.followedChannels(userId);
+    console.info(`[twitch] ${list.length} gefolgte Kanäle aus dem Konto`);
     if (store.mergeFollows(list)) send('twitch:follows', store.twitchFollows);
+    if (report && list.length) toast(`${list.length} gefolgte Kanäle von Twitch übernommen`);
   } catch (err) {
     console.warn('[twitch] Gefolgte:', err?.message ?? err);
+    if (report) toast(`Gefolgte Kanäle konnten nicht von Twitch geholt werden: ${err?.message ?? err}`);
   }
 }
 
@@ -991,6 +1000,7 @@ function setupIpc() {
   ipcMain.handle('tw:follows', () => store.twitchFollows);
   ipcMain.handle('tw:followed', () => twitchFollowed());
   ipcMain.handle('tw:setFollow', (_e, channel, on) => setTwitchFollow(channel, on === true));
+  ipcMain.handle('tw:syncFollows', () => syncTwitchFollows({ report: true }));
   ipcMain.handle('twitch:status', () => TwitchAccount.status());
   ipcMain.handle('twitch:loginStart', (_e, inWindow) => startTwitchLogin({ inWindow: inWindow === true }));
   ipcMain.on('twitch:loginCancel', () => {
