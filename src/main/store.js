@@ -22,7 +22,8 @@ export const DEFAULT_SETTINGS = {
   historyEnabled: true,
   platform: 'youtube', // was beim Start offen ist: 'youtube' oder 'twitch'
   twitchLanguage: 'de', // beliebte Twitch-Streams: 'de', 'en' oder '' (alle Sprachen)
-  twitchChat: true, // Chat neben Twitch-Streams zeigen
+  twitchChatOpen: false, // Chat neben Twitch-Live-Streams gleich zeigen (sonst ausgeblendet)
+  remotePower: true, // Handy darf den PC neu starten und herunterfahren
 };
 
 const MAX_HISTORY = 500;
@@ -50,6 +51,8 @@ export class Store {
     this.settingsFile = path.join(dir, 'settings.json');
     this.libraryFile = path.join(dir, 'library.json');
     this.settings = { ...DEFAULT_SETTINGS, ...readJson(this.settingsFile, {}) };
+    // bis 0.1.21: Chat immer gleich offen (jetzt startet er ausgeblendet)
+    delete this.settings.twitchChat;
     const lib = readJson(this.libraryFile, {});
     this.history = Array.isArray(lib.history) ? lib.history : [];
     this.recommendations = Array.isArray(lib.recommendations) ? lib.recommendations : [];

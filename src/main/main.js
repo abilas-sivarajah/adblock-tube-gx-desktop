@@ -11,6 +11,7 @@ import * as Account from './account.js';
 import * as TW from './twitch.js';
 import * as TwitchAccount from './twitch-account.js';
 import { CastServer } from './cast-server.js';
+import { powerAction } from './power.js';
 import { Session } from './session.js';
 import { Store, lanAddresses } from './store.js';
 import { isTwitchVideo, sanitizeChannel, sanitizeTwitchChannel, sanitizeVideo } from './protocol.js';
@@ -41,6 +42,8 @@ let store;
 let server;
 let session;
 let blockerId = null;
+let chatVisible = false; // Twitch-Chat neben dem Video gerade zu sehen
+let powerPending = false;
 
 // Zuletzt vom Player gemeldeter Zustand
 let playback = idleState();
@@ -784,9 +787,44 @@ function onRemoteCommand(cmd, peer) {
     case 'display':
       moveToDisplay(cmd.id);
       break;
+    case 'twitchChat':
+      if (current?.video?.platform === 'twitch' && current.video.isLive) send('player:command', cmd);
+      else server?.sendTo(peer.id, { type: 'notice', message: 'Am PC läuft gerade kein Twitch-Live-Stream' });
+      break;
+    case 'power':
+      powerFromPhone(cmd.action, peer);
+      break;
     default:
       // pause, resume, toggle, seek, seekBy, volume, volumeBy, mute, speed → Player im Fenster
       send('player:command', cmd);
+  }
+}
+
+/** PC neu starten oder herunterfahren – erzwungen, offene Programme werden ohne Nachfrage geschlossen. */
+async function powerFromPhone(action, peer) {
+  const restart = action === 'restart';
+  if (!store.settings.remotePower) {
+    server?.sendTo(peer.id, { type: 'notice', message: 'Am PC ist das in GX Tube abgeschaltet (Einstellungen → Handy darf den PC ausschalten)' });
+    toast(`${peer.name} wollte den PC ${restart ? 'neu starten' : 'herunterfahren'} – in den Einstellungen abgeschaltet`);
+    return;
+  }
+  if (powerPending) return;
+  powerPending = true;
+  toast(`${peer.name}: Der PC wird ${restart ? 'neu gestartet' : 'heruntergefahren'} …`);
+  // Handys vorwarnen, damit sie den Abbruch der Verbindung einordnen können
+  server?.broadcast({ type: 'power', action });
+  saveProgress();
+  store.saveLibraryNow();
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  try {
+    await powerAction(action);
+    // Nicht in den Infobereich ausweichen, sonst hält das Fenster das Ausschalten auf
+    quitting = true;
+  } catch (err) {
+    powerPending = false;
+    const message = `Der PC lässt sich nicht ${restart ? 'neu starten' : 'herunterfahren'}: ${err.message}`.slice(0, 300);
+    toast(message);
+    server?.broadcast({ type: 'notice', message });
   }
 }
 
@@ -817,6 +855,11 @@ function stateMessage() {
     fullscreen: Boolean(win && !win.isDestroyed() && win.isFullScreen()),
     displayId: currentDisplayId(),
     displays: displayList(),
+    // Twitch-Chat neben dem Live-Stream (null: gerade kein Twitch-Live-Stream)
+    twitchChat: current?.video?.platform === 'twitch' && current.video.isLive ? chatVisible : null,
+    // Darf das Handy den PC ausschalten? Startet GX Tube mit dem PC (wichtig nach dem Neustart)?
+    power: store.settings.remotePower,
+    autostart: store.settings.openAtLogin,
   };
 }
 
@@ -874,6 +917,7 @@ function setupIpc() {
     if (s.autoplay !== session.autoplay) session.setAutoplay(s.autoplay);
     if (s.openAtLogin !== before.openAtLogin) applyLoginItem();
     send('app:info', appInfo());
+    broadcastState();
     return s;
   });
   ipcMain.handle('library:get', () => ({ history: store.history.slice(0, 60), recommendations: store.recommendations.slice(0, 60), searchHistory: store.searchHistory }));
@@ -980,6 +1024,10 @@ function setupIpc() {
   });
 
   ipcMain.on('window:fullscreen', (_e, on) => win?.setFullScreen(Boolean(on)));
+  ipcMain.on('chat:visible', (_e, on) => {
+    chatVisible = Boolean(on);
+    broadcastState();
+  });
   ipcMain.handle('window:isFullscreen', () => Boolean(win?.isFullScreen()));
   ipcMain.on('clients:kick', (_e, id) => server?.kick(Number(id)));
   ipcMain.handle('yt:channel', (_e, id) => YT.channel(String(id)));

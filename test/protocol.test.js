@@ -88,3 +88,12 @@ test('Twitch-Kanal fürs Folgen wird geprüft', () => {
   assert.equal(sanitizeTwitchChannel({ login: 'x', userId: 'abc' }).userId, null);
   assert.throws(() => sanitizeTwitchChannel({ login: 'bad login' }), ProtocolError);
 });
+
+test('Twitch-Chat und PC ausschalten vom Handy', () => {
+  assert.deepEqual(parseCommand('{"type":"twitchChat"}'), { type: 'twitchChat', on: null });
+  assert.deepEqual(parseCommand({ type: 'twitchChat', on: false }), { type: 'twitchChat', on: false });
+  assert.deepEqual(parseCommand({ type: 'power', action: 'restart' }), { type: 'power', action: 'restart' });
+  assert.deepEqual(parseCommand({ type: 'power', action: 'shutdown', force: false }), { type: 'power', action: 'shutdown' });
+  assert.throws(() => parseCommand({ type: 'power' }), ProtocolError);
+  assert.throws(() => parseCommand({ type: 'power', action: 'rm -rf /' }), ProtocolError);
+});

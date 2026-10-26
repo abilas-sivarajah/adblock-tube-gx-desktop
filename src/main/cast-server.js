@@ -118,6 +118,11 @@ export class CastServer extends EventEmitter {
     for (const [ws, peer] of this.peers) if (peer.hello) this.send(ws, data);
   }
 
+  /** Nachricht nur an einen Client (z. B. Hinweis auf seinen Befehl). */
+  sendTo(peerId, message) {
+    for (const [ws, peer] of this.peers) if (peer.id === peerId && peer.hello) this.send(ws, message);
+  }
+
   /** Einen Client trennen (z. B. "Gerät trennen" in den Einstellungen). */
   kick(peerId) {
     for (const [ws, peer] of this.peers) if (peer.id === peerId) ws.close(4001, 'Vom PC getrennt');

@@ -39,6 +39,12 @@ Jeder Push auf `main` baut automatisch eine neue Version (GitHub Actions).
 Findet die App den PC nicht (manche Router blockieren die Suche), in der App **„Per Adresse verbinden“**
 wählen und die Adresse eingeben, die GX Tube Desktop auf der Startseite anzeigt (z. B. `192.168.178.23`).
 
+Im Streamen-Menü der App lässt sich der PC außerdem ganz vom Sofa aus bedienen: Lautstärke, Vollbild,
+Bildschirm wählen, Twitch-Chat ein-/ausblenden und **PC neu starten / herunterfahren**. Das Ausschalten ist
+erzwungen – offene Programme werden ohne Nachfrage geschlossen – und lässt sich am PC unter
+*Einstellungen → Handy darf den PC ausschalten* abschalten. Damit GX Tube nach einem Neustart wieder
+erreichbar ist, *Mit dem Computer starten* einschalten.
+
 ## 🔑 Mit Google anmelden (optional)
 
 Manchmal sperrt YouTube Anfragen ohne Anmeldung aus deinem Netz („Bestätige, dass du kein Bot bist“),
@@ -64,7 +70,8 @@ Oben links **YouTube | Twitch** umschalten (GX Tube merkt sich die Wahl):
 - **Ohne Werbung:** Der Werbeblocker aus Adblock GX holt während einer Werbepause den Stream über eine
   zweite, werbefreie Twitch-Sitzung (kurz in 360p, dann wieder in voller Qualität). Findet er keine,
   zeigt er für die Dauer der Werbung ein schwarzes Bild. Werbung wird nie als „gesehen“ gemeldet.
-- **Chat** rechts neben Live-Streams (mit 7TV-, BTTV- und FFZ-Emotes), mit **c** ein-/ausblenden.
+- **Chat** rechts neben Live-Streams (mit 7TV-, BTTV- und FFZ-Emotes): startet ausgeblendet, mit **c**, dem
+  Chat-Knopf oder vom Handy ein-/ausblenden.
   Mitlesen geht ohne Konto, **schreiben** mit Twitch-Anmeldung.
 - **Bei Twitch anmelden** (Einstellungen → Twitch): wie die Twitch-App auf dem Fernseher –
   der PC zeigt einen Code für **twitch.tv/activate** auf dem Handy, oder „Hier im Fenster“ öffnet die Seite

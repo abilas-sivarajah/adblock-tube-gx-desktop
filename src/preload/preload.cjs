@@ -42,6 +42,7 @@ contextBridge.exposeInMainWorld('gx', {
 
   setFullscreen: (on) => ipcRenderer.send('window:fullscreen', on),
   isFullscreen: () => ipcRenderer.invoke('window:isFullscreen'),
+  chatVisible: (on) => ipcRenderer.send('chat:visible', on),
   kick: (id) => ipcRenderer.send('clients:kick', id),
   openExternal: (url) => ipcRenderer.send('open:external', url),
   updateStatus: () => ipcRenderer.invoke('update:status'),

@@ -226,6 +226,7 @@ function onCommand(cmd) {
     case 'volumeBy': player.volumeBy(cmd.delta); showVolumeHint(); break;
     case 'mute': player.setMuted(cmd.muted); break;
     case 'speed': player.setSpeed(cmd.value); break;
+    case 'twitchChat': toggleChat(cmd.on ?? undefined); break;
     default: break;
   }
   showControls();
@@ -1229,6 +1230,7 @@ async function renderSettings() {
   f.append(addrRow);
   f.append(toggleRow('Fenster nach vorne holen', 'Wenn das Handy ein Video schickt', 'focusOnCast'));
   f.append(toggleRow('Vollbild beim Streamen', 'Videos vom Handy direkt im Vollbild zeigen (wie auf dem Fernseher)', 'fullscreenOnCast'));
+  f.append(toggleRow('Handy darf den PC ausschalten', 'Neu starten und herunterfahren vom Handy – sofort, offene Programme werden ohne Nachfrage geschlossen', 'remotePower'));
 
   f.append(el('h3', null, 'Wiedergabe'));
   const qRow = el('div', 'set-row');
@@ -1274,7 +1276,7 @@ async function renderSettings() {
 
   f.append(el('h3', null, 'Twitch'));
   f.append(Twitch.accountRow());
-  f.append(toggleRow('Chat neben Live-Streams', 'Den Stream-Chat rechts neben dem Video zeigen (mit „c“ ein- und ausblenden)', 'twitchChat'));
+  f.append(toggleRow('Chat gleich zeigen', 'Den Stream-Chat sofort neben Live-Streams öffnen. Sonst startet er ausgeblendet – einblenden mit „c“, dem Chat-Knopf oder vom Handy', 'twitchChatOpen'));
   const adRow = el('div', 'set-row');
   const adLabel = el('div', 'label');
   adLabel.append(el('b', null, 'Twitch-Werbeblocker'), el('span', null, 'Aus Adblock GX: holt während Werbepausen den Stream ohne Werbung, sonst zeigt GX Tube kurz ein schwarzes Bild statt der Werbung. Immer an.'));
@@ -1581,6 +1583,8 @@ function openTwitchQualityMenu() {
 let chat = null;
 let chatLogin = null;
 let chatStick = true;
+// Chat gewünscht? Beim Start ausgeblendet (außer in den Einstellungen anders gewählt), danach gilt die letzte Wahl
+let chatWanted = null;
 const CHAT_MAX = 250;
 const BADGES = { broadcaster: ['▶', 'Streamer'], moderator: ['MOD', 'Moderator'], vip: ['VIP', 'VIP'], subscriber: ['★', 'Abonnent'] };
 const NAME_COLORS = ['#ff7f50', '#1e90ff', '#9acd32', '#ff69b4', '#daa520', '#5f9ea0', '#00ff7f', '#b22222', '#d2691e', '#8a2be2', '#2e8b57', '#ff4500'];
@@ -1624,6 +1628,8 @@ function bindChat() {
     if (e.key === 'Escape') $('chatInput').blur();
   });
   $('chatLoginBtn').addEventListener('click', () => Twitch.openLoginDialog());
+  // Dem Handy melden, ob der Chat zu sehen ist
+  new MutationObserver(() => gx.chatVisible(!$('chatPanel').hidden)).observe($('chatPanel'), { attributes: true, attributeFilter: ['hidden'] });
 }
 
 async function startChat(login) {
@@ -1635,7 +1641,8 @@ async function startChat(login) {
   if (chatLogin !== login) return;
   chat.join(login, auth);
   renderChatState();
-  if (state.settings?.twitchChat !== false && $('queuePanel').hidden) $('chatPanel').hidden = false;
+  chatWanted ??= state.settings?.twitchChatOpen === true;
+  if (chatWanted && $('queuePanel').hidden) toggleChat(true);
 }
 
 function stopChat() {
@@ -1648,6 +1655,7 @@ function toggleChat(force) {
   if (!twitchLive(state.video)) return;
   const panel = $('chatPanel');
   panel.hidden = force === undefined ? !panel.hidden : !force;
+  chatWanted = !panel.hidden;
   if (!panel.hidden) {
     $('queuePanel').hidden = true;
     const list = $('chatList');

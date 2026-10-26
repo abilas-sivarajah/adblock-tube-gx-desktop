@@ -51,7 +51,10 @@ try {
   const v = await win.evaluate(() => ({ h: document.getElementById('video').videoHeight, t: document.getElementById('video').currentTime }));
   console.log('[live]', login, v, '|', await win.locator('#vChannel').textContent());
   assert.ok(v.h >= 360, 'kein Bild');
-  // Chat liest mit
+  // Chat startet ausgeblendet, "c" blendet ihn ein; er liest mit
+  await win.waitForTimeout(1500);
+  assert.equal(await win.locator('#chatPanel').isHidden(), true, 'Chat sollte ausgeblendet starten');
+  await win.keyboard.press('c');
   await win.waitForSelector('#chatPanel:not([hidden])');
   await win.waitForFunction(() => document.querySelectorAll('#chatList .chat-line:not(.system)').length >= 3, null, { timeout: 45_000 }).catch(() => {});
   const lines = await win.locator('#chatList .chat-line:not(.system)').count();
@@ -140,10 +143,19 @@ try {
     phone.once('open', resolve);
     phone.once('error', reject);
   });
+  const notices = [];
   phone.on('message', (d) => {
     const m = JSON.parse(String(d));
     if (m.type === 'state') states.push(m);
+    if (m.type === 'notice' || m.type === 'power') notices.push(m);
   });
+  const waitState = async (check, what) => {
+    for (let i = 0; i < 40; i++) {
+      if (check(states.at(-1) ?? {})) return;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    assert.fail(`Handy bekommt nicht: ${what}`);
+  };
   phone.send(JSON.stringify({ type: 'hello', name: 'Test-Handy', deviceId: 'twitch-test', app: 'test', protocol: 1 }));
   phone.send(JSON.stringify({ type: 'play', video: { id: `twitch:${login}`, title: '', channelName: '' } }));
   await win.waitForFunction(() => document.getElementById('video').currentTime > 2 && document.getElementById('watch').classList.contains('full'), null, { timeout: 60_000 });
@@ -152,7 +164,24 @@ try {
   console.log('[handy]', st?.status, st?.video?.id, st?.video?.title?.slice(0, 40), '| live:', st?.isLive);
   assert.equal(st?.isLive, true);
   assert.ok(st.video.title, 'Titel fürs Handy nachgetragen');
+  // Chat am PC vom Handy aus (die letzte Wahl gilt weiter: an)
+  await waitState((m) => m.twitchChat === true, 'Chat an');
+  phone.send(JSON.stringify({ type: 'twitchChat', on: false }));
+  await waitState((m) => m.twitchChat === false, 'Chat aus');
+  assert.equal(await win.locator('#chatPanel').isHidden(), true);
+  phone.send(JSON.stringify({ type: 'twitchChat' }));
+  await waitState((m) => m.twitchChat === true, 'Chat umgeschaltet');
+  assert.equal(await win.locator('#chatPanel').isVisible(), true);
+  // PC ausschalten: hier abgeschaltet → nur ein Hinweis (sonst führe der Test-PC herunter)
+  assert.equal(states.at(-1).power, true, 'Ausschalten ist erlaubt (Standard)');
+  await win.evaluate(() => window.gx.setSettings({ remotePower: false }));
+  await waitState((m) => m.power === false, 'Ausschalten abgeschaltet');
+  phone.send(JSON.stringify({ type: 'power', action: 'shutdown' }));
+  for (let i = 0; i < 20 && !notices.length; i++) await new Promise((r) => setTimeout(r, 250));
+  console.log('[ausschalten]', notices.map((n) => n.type + ': ' + (n.message ?? n.action)).join(' | '));
+  assert.equal(notices[0]?.type, 'notice');
   phone.send(JSON.stringify({ type: 'stop' }));
+  await waitState((m) => m.twitchChat === null, 'kein Twitch-Chat ohne Stream');
   phone.close();
 
   // ---- Anmeldung per Code

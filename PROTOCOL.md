@@ -97,9 +97,17 @@ einer Warteschlange gemischt sein.
 | `autoplay` | `enabled` | Autoplay an/aus |
 | `fullscreen` | `on` (optional) | Vollbild am PC an/aus – ohne `on` umschalten. Beim Einschalten kommt das Video groß nach vorne |
 | `display` | `id` | Fenster auf diesen Bildschirm verschieben (IDs aus `state.displays`), Vollbild bleibt erhalten |
+| `twitchChat` | `on` (optional) | Twitch-Chat neben dem Live-Stream ein-/ausblenden – ohne `on` umschalten. Er startet ausgeblendet |
+| `power` | `action`: `restart` / `shutdown` | PC **erzwungen** neu starten bzw. herunterfahren: offene Programme werden ohne Nachfrage geschlossen. Nur wenn am PC erlaubt (`state.power`) |
 | `stop` | – | Wiedergabe beenden, Warteschlange leeren |
 
-Fehlerhafte Befehle beantwortet der PC mit `{ "type": "error", "message": "…" }`.
+Fehlerhafte Befehle beantwortet der PC mit `{ "type": "error", "message": "…" }`. Hinweise, die die App
+anzeigen soll (z. B. „Ausschalten am PC abgeschaltet“), kommen als `{ "type": "notice", "message": "…" }`.
+
+**Ausschalten:** Bevor der PC neu startet oder herunterfährt, schickt er allen Handys
+`{ "type": "power", "action": "restart" }` – danach bricht die Verbindung ab. Lehnt das System ab, kommt
+stattdessen ein `notice` mit dem Grund. Nach einem Neustart ist GX Tube nur wieder erreichbar, wenn es mit dem
+PC startet (`state.autostart`).
 
 ## 4. Meldungen (PC → Handy)
 
@@ -113,10 +121,13 @@ Fehlerhafte Befehle beantwortet der PC mit `{ "type": "error", "message": "…" 
   "volume": 80, "muted": false, "speed": 1, "isLive": false, "error": null,
   "segments": [ { "startMs": 10000, "endMs": 25000, "category": "sponsor", "label": "Sponsor", "uuid": "…" } ],
   "queueIndex": 0, "queueLength": 3, "hasNext": true, "hasPrevious": false, "autoplay": true,
-  "fullscreen": false, "displayId": 1,
+  "fullscreen": false, "displayId": 1, "twitchChat": null, "power": true, "autostart": false,
   "displays": [ { "id": 1, "name": "DELL U2415", "primary": true, "width": 1920, "height": 1200 },
                 { "id": 2, "name": "Bildschirm 2", "primary": false, "width": 3840, "height": 2160 } ] }
 ```
+
+`twitchChat`: Chat neben dem Twitch-Live-Stream zu sehen (`null`: gerade kein Twitch-Live-Stream). `power`: Das Handy
+darf den PC ausschalten (Einstellung am PC). `autostart`: GX Tube startet mit dem PC.
 
 `status`: `idle` (nichts geladen), `loading`, `buffering`, `playing`, `paused`, `ended`, `error` (dann steht der Grund in `error`).
 Zwischen zwei Meldungen kann die App die Position selbst weiterzählen (`positionMs + vergangene Zeit × speed`, solange `playing`).

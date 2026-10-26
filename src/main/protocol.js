@@ -150,8 +150,12 @@ export function parseCommand(raw) {
     case 'autoplay':
       return { type, enabled: msg.enabled === true };
     case 'fullscreen':
+    case 'twitchChat':
       // ohne "on": umschalten
       return { type, on: typeof msg.on === 'boolean' ? msg.on : null };
+    case 'power':
+      if (msg.action !== 'restart' && msg.action !== 'shutdown') throw new ProtocolError('Ungültige Aktion');
+      return { type, action: msg.action };
     case 'display': {
       const id = typeof msg.id === 'number' && Number.isSafeInteger(msg.id) ? msg.id : null;
       if (id === null) throw new ProtocolError('Bildschirm fehlt');
