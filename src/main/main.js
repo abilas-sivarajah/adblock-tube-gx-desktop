@@ -308,7 +308,7 @@ function setupMediaHeaders() {
  * Video laden. [exclude]: YouTube-Clients, deren Stream bei diesem Video schon abgelehnt
  * wurde ([fallback] = gleiches Video, nur anderer Client – Details/SponsorBlock bleiben).
  */
-async function loadVideo({ video, startMs, exclude = [], fallback = false, notes = [] }) {
+async function loadVideo({ video, startMs, exclude = [], fallback = false, notes = [], resetAttempts = false }) {
   const previous = fallback && current?.video.id === video.id ? current : null;
   if (!previous) saveProgress();
   const token = ++loadToken;
@@ -323,7 +323,9 @@ async function loadVideo({ video, startMs, exclude = [], fallback = false, notes
     stream: null,
     exclude,
     notes,
-    attempts: (previous?.attempts ?? 0) + (previous ? 1 : 0),
+    // Neuversuche für dieses Video. [resetAttempts]: der letzte Stream lief lange – dann zählt das nicht
+    // als weiterer Fehlversuch (sonst gäbe ein langer Live-Stream nach dem ersten Abbruch für immer auf)
+    attempts: previous ? (resetAttempts ? 1 : previous.attempts + 1) : 0,
   };
   playback = { ...playback, status: 'loading', positionMs: resume, durationMs: previous ? playback.durationMs : Math.max(0, video.durationSec * 1000), bufferedMs: 0 };
   if (!previous) store.recordWatch(video);
@@ -992,9 +994,11 @@ function setupIpc() {
     if (isTwitchVideo(current.video.id)) {
       // Twitch: einmal mit frischer Adresse (neue Sitzung) weitermachen, dann aufgeben
       const notes = [...(current.notes ?? []), `Twitch: im Player gescheitert (${String(detail || message || 'Fehler').slice(0, 160)})`];
-      if (current.attempts < 1) {
+      // Lief der Stream schon eine Weile, ist das ein neuer Abbruch – nicht der zweite Fehlversuch
+      const ranLong = current.resolvedAt && Date.now() - current.resolvedAt > 10 * 60 * 1000;
+      if (current.attempts < 1 || ranLong) {
         console.warn(`[twitch] im Player gescheitert (${detail ?? message}) – neu laden`);
-        loadVideo({ video: current.video, startMs: Number(positionMs) || 0, fallback: true, notes });
+        loadVideo({ video: current.video, startMs: Number(positionMs) || 0, fallback: true, notes, resetAttempts: Boolean(ranLong) });
         return;
       }
       current.error = 'Twitch hat den Stream abgebrochen.';
@@ -1012,9 +1016,11 @@ function setupIpc() {
     if (http && used && !expired) YT.reportClientFailure(used);
     const left = YT.clientsLeft(exclude);
     // Höchstens dreimal wechseln – viele Anfragen hintereinander lösen bei YouTube die Bot-Sperre aus
-    if (left > 0 && current.attempts < 3) {
+    // Abgelaufene Adressen (lange Pause) zählen nicht als Fehlversuch – sonst ließ sich ein Video
+    // nach drei langen Pausen gar nicht mehr fortsetzen
+    if (left > 0 && (current.attempts < 3 || expired)) {
       console.warn(`[stream] ${used ?? '?'} abgelehnt bei ${Math.round((Number(positionMs) || 0) / 1000)} s – nächster Client (${detail ?? message})`);
-      loadVideo({ video: current.video, startMs: Number(positionMs) || 0, exclude, fallback: true, notes });
+      loadVideo({ video: current.video, startMs: Number(positionMs) || 0, exclude, fallback: true, notes, resetAttempts: Boolean(expired) });
       return;
     }
     current.error = message || 'Wiedergabefehler';
@@ -1040,6 +1046,8 @@ function setupIpc() {
     YT.sabrReload(String(id), String(client), reloadContext && typeof reloadContext === 'object' ? reloadContext : null),
   );
   ipcMain.handle('tw:home', (_e, language) => TW.home({ language: String(language ?? '') }));
+  ipcMain.handle('tw:streams', (_e, language) => TW.streams({ language: String(language ?? '') }));
+  ipcMain.handle('tw:games', () => TW.games());
   ipcMain.handle('tw:moreStreams', (_e, language, cursor) => TW.moreStreams({ language: String(language ?? ''), cursor: String(cursor) }));
   ipcMain.handle('tw:category', (_e, name, language, cursor) => TW.category(String(name), { language: String(language ?? ''), cursor: typeof cursor === 'string' ? cursor : null }));
   ipcMain.handle('tw:search', (_e, q) => {

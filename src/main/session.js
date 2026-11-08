@@ -136,6 +136,12 @@ export class Session extends EventEmitter {
     }
     const rel = this.nextRelated();
     if (!rel) return false;
+    // Autoplay hängt immer weiter an: ältere, schon gesehene Videos vorne abschneiden, sonst wächst
+    // die Liste über MAX_QUEUE hinaus (das Handy nimmt nur so viele an, die Position stimmt dann nicht)
+    while (this.items.length >= MAX_QUEUE && this.index > 0) {
+      this.items.shift();
+      this.index--;
+    }
     this.items.push({ ...rel, autoplay: true });
     this.index = this.items.length - 1;
     this.#changed();
