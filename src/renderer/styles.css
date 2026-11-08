@@ -399,3 +399,167 @@ body.platform-twitch #searchInput:focus { border-color: var(--twitch); }
 .chat-login { padding: 12px; border-top: 1px solid #26262c; text-align: center; }
 .chat-login .pill { background: var(--twitch); color: #fff; }
 .watch.mini .ad-overlay.small { display: none; }
+
+/* ------------------------------------------------------------------ Twitch wie twitch.tv */
+
+/* Farben im Twitch-Modus (dunkel wie twitch.tv) */
+body.platform-twitch { --bg: #0e0e10; --bg-raised: #1f1f23; --bg-hover: #26262c; --chip: #2f2f35; --text: #efeff1; --text-2: #adadb8; --divider: #3a3a3d; }
+body.platform-twitch #topbar { background: #18181b; box-shadow: 0 1px 2px rgba(0,0,0,.9); }
+body.platform-twitch .search-btn, body.platform-twitch #searchInput { background: #18181b; border-color: #3a3a3d; }
+
+/* Reiter oben: Startseite | Folge ich | Durchsuchen */
+.tw-tabs { display: flex; gap: 2px; flex: none; }
+.tw-tabs button { position: relative; height: 36px; padding: 0 10px; border-radius: 4px; font-size: 15px; font-weight: 600; color: var(--text); white-space: nowrap; }
+.tw-tabs button:hover { color: var(--twitch-2); background: rgba(255,255,255,.04); }
+.tw-tabs button.active { color: var(--twitch-2); }
+.tw-tabs button.active::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -10px; height: 2px; background: var(--twitch-2); }
+@media (max-width: 1150px) { .tw-tabs button { font-size: 13px; padding: 0 6px; } .tw-tabs button.active::after { left: 6px; right: 6px; } }
+
+/* Seitenleiste links */
+:root { --tw-side: 240px; }
+body.tw-side-collapsed { --tw-side: 50px; }
+.tw-sidebar { position: fixed; top: var(--top); left: 0; bottom: 0; width: var(--tw-side); z-index: 10; background: #1f1f23; overflow: hidden auto; padding-bottom: 24px; }
+body.platform-twitch #views { left: var(--tw-side); }
+.tw-side-top { display: flex; align-items: center; justify-content: space-between; padding: 10px 6px 4px 10px; font-size: 13px; font-weight: 700; text-transform: uppercase; }
+body.tw-side-collapsed .tw-side-top { justify-content: center; padding: 10px 0 4px; }
+.tw-side-toggle { width: 30px; height: 30px; border-radius: 4px; }
+.tw-side-toggle svg.i { width: 20px; height: 20px; }
+.tw-side-head { padding: 12px 10px 4px; font-size: 12px; font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+body.tw-side-collapsed .tw-side-head { text-align: center; padding: 12px 0 4px; }
+.tw-side-row { display: flex; align-items: center; gap: 10px; padding: 5px 10px; cursor: pointer; }
+.tw-side-row:hover { background: #26262c; }
+.tw-side-avatar { position: relative; flex: none; width: 30px; height: 30px; }
+.tw-side-avatar img { width: 30px; height: 30px; border-radius: 50%; object-fit: cover; background: #333; }
+.tw-side-row.offline .tw-side-avatar img { filter: grayscale(1); opacity: .6; }
+.tw-side-dot { display: none; position: absolute; right: -2px; bottom: -2px; width: 10px; height: 10px; border-radius: 50%; background: #eb0400; border: 2px solid #1f1f23; }
+body.tw-side-collapsed .tw-side-dot { display: block; }
+.tw-side-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.tw-side-text b { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tw-side-text span { font-size: 13px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tw-side-row.offline .tw-side-text b { color: var(--text-2); }
+.tw-side-viewers { flex: none; display: flex; align-items: center; gap: 5px; font-size: 13px; }
+.tw-side-viewers i { width: 8px; height: 8px; border-radius: 50%; background: #eb0400; }
+body.tw-side-collapsed .tw-side-text, body.tw-side-collapsed .tw-side-viewers, body.tw-side-collapsed .tw-side-more, body.tw-side-collapsed .tw-side-hint { display: none; }
+body.tw-side-collapsed .tw-side-row { justify-content: center; padding: 5px 0; }
+.tw-side-more { padding: 6px 10px; color: var(--twitch-2); font-size: 13px; }
+.tw-side-more:hover { text-decoration: underline; }
+.tw-side-hint { padding: 6px 10px; margin: 0; color: var(--text-2); font-size: 13px; }
+
+/* Seiten */
+.view.tw-view { padding: 20px 30px 120px; }
+.tw-page-title { font-size: 40px; font-weight: 700; margin: 10px 0 14px; }
+.tw-page-tabs { display: flex; gap: 22px; border-bottom: 1px solid #3a3a3d; margin-bottom: 20px; }
+.tw-page-tabs:empty { display: none; }
+.tw-page-tab { padding: 8px 0; margin-bottom: -1px; border-bottom: 2px solid transparent; font-size: 16px; font-weight: 600; }
+.tw-page-tab:hover { color: var(--twitch-2); }
+.tw-page-tab.active { color: var(--twitch-2); border-bottom-color: var(--twitch-2); }
+.tw-browse-bar { display: flex; margin-bottom: 16px; }
+.tw-browse-bar:empty { display: none; }
+.tw-browse-bar .tw-chips, .tw-category-head .tw-chips { margin-left: 0; }
+.tw-chip.active { background: var(--twitch); color: #fff; }
+.tw-view .shelf-head h2 { font-size: 18px; font-weight: 600; }
+.tw-view .shelf-head .tw-chips { margin-left: auto; }
+
+/* "Mehr anzeigen" als Trennlinie */
+.tw-more { display: flex; align-items: center; gap: 10px; margin: 16px 0 6px; }
+.tw-more::before, .tw-more::after { content: ""; flex: 1; height: 1px; background: #3a3a3d; }
+.tw-more-btn { display: flex; align-items: center; gap: 2px; padding: 4px 10px; border-radius: 4px; color: var(--twitch-2); font-size: 13px; font-weight: 600; }
+.tw-more-btn:hover { background: #26262c; }
+.tw-more-btn svg.i { width: 18px; height: 18px; }
+
+/* Stream-Karten: lila Kante beim Darüberfahren */
+.tw-grid { grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 26px 12px; }
+.tw-card .thumb { border-radius: 0; overflow: visible; background: var(--twitch); }
+.tw-card .thumb > * { transition: transform .1s ease; }
+.tw-card:hover .thumb > *, .tw-card:hover .thumb > img { transform: translate(6px, -6px); }
+.tw-card .thumb img { background: #26262c; }
+.tw-card .thumb img.broken { visibility: visible; }
+.tw-live { left: 10px; top: 10px; padding: 0 5px; border-radius: 4px; font-size: 13px; font-weight: 600; line-height: 20px; text-transform: uppercase; }
+.tw-viewers { left: 10px; bottom: 10px; padding: 0 4px; border-radius: 2px; background: rgba(0,0,0,.6); font-size: 13px; line-height: 20px; }
+.tw-duration { position: absolute; left: 10px; top: 10px; padding: 0 4px; border-radius: 2px; background: rgba(0,0,0,.6); font-size: 13px; line-height: 20px; }
+.tw-card .card-body { gap: 10px; margin-top: 10px; }
+.tw-avatar { width: 40px; height: 40px; }
+.tw-title { display: block; font-size: 14px; line-height: 18px; max-height: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tw-card .card-meta { margin-top: 2px; font-size: 13px; }
+.tw-card .card-channel { color: var(--text-2); }
+.tw-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.tw-tag { padding: 0 8px; border-radius: 9px; background: #2f2f35; color: var(--text-2); font-size: 12px; font-weight: 600; line-height: 20px; white-space: nowrap; max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+.pill.tw-watch { background: var(--twitch); color: #fff; }
+.pill.tw-watch:hover { background: #772ce8; }
+
+/* Kategorien (Coverbilder) */
+.tw-view .tw-games { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 24px 12px; }
+.tw-view .tw-games-one-row { grid-template-rows: auto; grid-auto-rows: 0; row-gap: 0; overflow: hidden; }
+.tw-game-art { background: var(--twitch); }
+.tw-game-card .tw-game-art img { border-radius: 0; transition: transform .1s ease; }
+.tw-game-card:hover .tw-game-art img { transform: translate(6px, -6px); box-shadow: none; }
+.tw-game-name { font-size: 14px; }
+
+/* Großes Titelbild-Karussell */
+.tw-featured { position: relative; display: flex; align-items: stretch; height: 300px; max-width: 1120px; margin: 6px auto 40px; padding: 0 48px; }
+.tw-featured-stage { position: relative; flex: none; height: 100%; aspect-ratio: 16 / 9; cursor: pointer; background: #000; box-shadow: 0 6px 24px rgba(0,0,0,.6); }
+.tw-featured-stage img { width: 100%; height: 100%; object-fit: cover; }
+.tw-featured-play { position: absolute; inset: 0; display: grid; place-items: center; opacity: 0; background: rgba(0,0,0,.25); transition: opacity .15s; }
+.tw-featured-play svg.i { width: 72px; height: 72px; fill: #fff; }
+.tw-featured-stage:hover .tw-featured-play { opacity: 1; }
+.tw-featured-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; padding: 18px 20px; overflow: hidden; background: #18181b; }
+.tw-featured-who { display: flex; align-items: center; gap: 10px; }
+.tw-featured-who b { font-size: 16px; color: var(--twitch-2); cursor: pointer; }
+.tw-featured-who .tw-game { font-size: 14px; color: var(--twitch-2); }
+.tw-featured-title { margin: 2px 0 0; font-size: 14px; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.tw-featured-actions { display: flex; gap: 8px; margin-top: auto; }
+.tw-featured-nav { position: absolute; top: 50%; transform: translateY(-50%); }
+.tw-featured-nav.prev { left: 4px; }
+.tw-featured-nav.next { right: 4px; }
+.tw-featured-dots { position: absolute; left: 50%; bottom: -20px; transform: translateX(-50%); display: flex; gap: 6px; }
+.tw-featured-dots button { width: 8px; height: 8px; border-radius: 50%; background: #53535f; }
+.tw-featured-dots button.active { background: var(--twitch-2); }
+@media (max-width: 1100px) { .tw-featured { height: 230px; } }
+@media (max-width: 900px) { .tw-featured-info { display: none; } .tw-featured { justify-content: center; } }
+
+/* Folge ich: Kanal-Kacheln */
+.tw-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 16px 12px; }
+.tw-channel-tile { padding: 14px 8px; border-radius: 6px; background: #18181b; text-align: center; cursor: pointer; min-width: 0; }
+.tw-channel-tile:hover { background: #26262c; }
+.tw-channel-tile img { width: 80px; height: 80px; margin: 0 auto 10px; border-radius: 50%; object-fit: cover; background: #333; }
+.tw-channel-tile:not(.live) img { filter: grayscale(1); opacity: .7; }
+.tw-channel-tile.live img { outline: 3px solid #eb0400; outline-offset: 2px; }
+.tw-tile-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Suche: Kanäle als Zeilen */
+.tw-channel-list { display: flex; flex-direction: column; gap: 4px; }
+.tw-channel-row { display: flex; align-items: center; gap: 16px; padding: 10px; border-radius: 6px; cursor: pointer; }
+.tw-channel-row:hover { background: #1f1f23; }
+.tw-channel-row .card-text { flex: 1; min-width: 0; }
+.tw-channel-row .card-title { font-size: 16px; }
+.tw-channel-row .pill { flex: none; }
+.tw-row-avatar { position: relative; flex: none; }
+.tw-row-avatar img { width: 72px; height: 72px; border-radius: 50%; object-fit: cover; background: #333; }
+.tw-row-avatar.big img { width: 88px; height: 88px; }
+.tw-row-avatar.live img { outline: 3px solid #eb0400; outline-offset: 2px; }
+.tw-live.small { left: 50%; top: auto; bottom: -8px; transform: translateX(-50%); padding: 0 4px; font-size: 11px; line-height: 16px; }
+
+/* Kategorie-Kopf */
+.tw-category-head .tw-category-art { width: 110px; border-radius: 0; }
+.tw-viewers-line { display: flex; align-items: center; gap: 6px; }
+.tw-viewers-line svg.i { width: 18px; height: 18px; fill: var(--text-2); }
+
+/* Kanalseite */
+.tw-channel-head { position: relative; margin: -20px -30px 0; }
+.tw-banner { height: 190px; overflow: hidden; background: linear-gradient(135deg, #2b1b4d, #18181b 70%); }
+.tw-banner img { width: 100%; height: 100%; object-fit: cover; }
+.tw-channel-head .channel-back { position: absolute; top: 12px; left: 12px; background: rgba(0,0,0,.55); }
+.tw-channel-info { display: flex; align-items: center; gap: 18px; padding: 16px 30px 12px; }
+.tw-channel-info h1 { margin: 0 0 2px; font-size: 22px; }
+.tw-channel-info .channel-text { min-width: 0; }
+.tw-channel-actions { display: flex; gap: 8px; margin-left: auto; flex: none; }
+.tw-live-hero { display: flex; height: 300px; max-width: 1120px; margin-bottom: 28px; }
+.tw-live-hero .tw-featured-title { font-size: 16px; font-weight: 600; }
+.tw-live-hero .tw-game { color: var(--twitch-2); }
+.tw-live-hero .pill { align-self: flex-start; margin-top: auto; }
+@media (max-width: 900px) { .tw-live-hero { height: auto; flex-direction: column; } .tw-live-hero .tw-featured-stage { width: 100%; height: auto; } }
+.tw-offline-box { margin-bottom: 24px; padding: 28px; border-radius: 6px; background: #18181b; color: var(--text-2); font-size: 15px; }
+.tw-about { max-width: 820px; padding: 20px 24px; border-radius: 6px; background: #18181b; }
+.tw-about h2 { margin: 0 0 6px; font-size: 18px; }
+.tw-about-followers { margin: 0 0 12px; color: var(--text-2); }
+.tw-about-desc { margin: 0 0 16px; white-space: pre-wrap; user-select: text; line-height: 1.5; }

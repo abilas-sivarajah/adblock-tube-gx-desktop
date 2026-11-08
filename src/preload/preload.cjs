@@ -57,6 +57,8 @@ contextBridge.exposeInMainWorld('gx', {
   // Twitch
   twitchHome: (language) => ipcRenderer.invoke('tw:home', language),
   twitchMoreStreams: (language, cursor) => ipcRenderer.invoke('tw:moreStreams', language, cursor),
+  twitchStreams: (language) => ipcRenderer.invoke('tw:streams', language),
+  twitchGames: () => ipcRenderer.invoke('tw:games'),
   twitchCategory: (name, language, cursor) => ipcRenderer.invoke('tw:category', name, language, cursor),
   twitchSearch: (q) => ipcRenderer.invoke('tw:search', q),
   twitchChannel: (login) => ipcRenderer.invoke('tw:channel', login),

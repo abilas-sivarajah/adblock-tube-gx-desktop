@@ -54,7 +54,7 @@ export function livePreview(login, width = 440, height = 248) {
 
 // ------------------------------------------------------------------ GraphQL
 
-const STREAM_FIELDS = 'id title viewersCount createdAt type previewImageURL(width: 440, height: 248) game { id name displayName boxArtURL(width: 72, height: 96) }';
+const STREAM_FIELDS = 'id title viewersCount createdAt type previewImageURL(width: 440, height: 248) freeformTags { name } game { id name displayName boxArtURL(width: 72, height: 96) }';
 const USER_FIELDS = 'id login displayName profileImageURL(width: 70)';
 const VIDEO_FIELDS = 'id title lengthSeconds viewCount publishedAt broadcastType previewThumbnailURL(width: 320, height: 180) game { name displayName }';
 const GAME_FIELDS = 'id name displayName viewersCount boxArtURL(width: 188, height: 250)';
@@ -117,6 +117,8 @@ export function toStream(node, user = null) {
     viewers: Number(node.viewersCount) || 0,
     startedAt: ms(node.createdAt),
     game: game(node.game),
+    // Tags wie auf twitch.tv ("Deutsch", "DropsAktiviert" …)
+    tags: (Array.isArray(node.freeformTags) ? node.freeformTags : []).map((t) => String(t?.name ?? '')).filter(Boolean).slice(0, 6),
     isLive: true,
     durationSec: -1,
   };
@@ -185,22 +187,57 @@ function streamOptions(language) {
   return lang ? `{sort: VIEWER_COUNT, broadcasterLanguages: [${lang}]}` : '{sort: VIEWER_COUNT}';
 }
 
+/**
+ * Weiterblättern mit Cursor lehnt Twitch ohne Integritäts-Prüfung ab ("failed integrity check").
+ * Die erste Seite geht: oben höchstens 30 Streams, in einer Kategorie bis zu 100 (PAGE).
+ * Lange Listen entstehen deshalb aus den Top-30 plus den Streams der größten Kategorien.
+ */
+const PAGE = 100;
+
+/** Beliebte Live-Streams (Sprache), nach Zuschauern – ohne Weiterblättern, siehe PAGE. */
+async function popular(language, { games = 12, perGame = 40 } = {}) {
+  const opts = streamOptions(language);
+  const data = await gql(
+    `query { top: streams(first: 30, options: ${opts}) { edges { node { ${STREAM_FIELDS} broadcaster { ${USER_FIELDS} } } } }
+      games(first: ${games}, options: {sort: VIEWER_COUNT}) { edges { node { streams(first: ${perGame}, options: ${opts}) { edges { node { ${STREAM_FIELDS} broadcaster { ${USER_FIELDS} } } } } } } } }`,
+  );
+  const seen = new Set();
+  return [...edges(data.top), ...edges(data.games).flatMap((e) => edges(e.node?.streams))]
+    .map((e) => toStream(e.node))
+    .filter((v) => v && !seen.has(v.id) && seen.add(v.id))
+    .sort((a, b) => b.viewers - a.viewers);
+}
+
 /** Startseite: beliebte Streams (Sprache), weltweit beliebt und die größten Kategorien. */
 export async function home({ language = 'de' } = {}) {
-  const data = await gql(
-    `query { lang: streams(first: 24, options: ${streamOptions(language)}) { edges { cursor node { ${STREAM_FIELDS} broadcaster { ${USER_FIELDS} } } } pageInfo { hasNextPage } }
-      top: streams(first: 12, options: {sort: VIEWER_COUNT}) { edges { node { ${STREAM_FIELDS} broadcaster { ${USER_FIELDS} } } } }
-      games(first: 24, options: {sort: VIEWER_COUNT}) { edges { node { ${GAME_FIELDS} } } } }`,
-  );
+  const [lang, data] = await Promise.all([
+    popular(language, { games: 8, perGame: 30 }),
+    gql(
+      `query { top: streams(first: 12, options: {sort: VIEWER_COUNT}) { edges { node { ${STREAM_FIELDS} broadcaster { ${USER_FIELDS} } } } }
+        games(first: 24, options: {sort: VIEWER_COUNT}) { edges { node { ${GAME_FIELDS} } } } }`,
+    ),
+  ]);
   return {
-    streams: edges(data.lang).map((e) => toStream(e.node)).filter(Boolean),
-    next: nextCursor(data.lang),
+    streams: lang,
+    // Weiterblättern geht nicht (siehe PAGE) – die Liste ist dafür gleich lang
+    next: null,
     top: edges(data.top).map((e) => toStream(e.node)).filter(Boolean),
     games: edges(data.games).map((e) => toGame(e.node)).filter(Boolean),
   };
 }
 
-/** Weitere beliebte Streams (Startseite weiter unten). */
+/** Live-Kanäle nach Zuschauern (Durchsuchen → Live-Kanäle). */
+export async function streams({ language = '' } = {}) {
+  return { items: await popular(language) };
+}
+
+/** Die meistgeschauten Kategorien (Durchsuchen → Kategorien). */
+export async function games() {
+  const data = await gql(`query { games(first: ${PAGE}, options: {sort: VIEWER_COUNT}) { edges { node { ${GAME_FIELDS} } } } }`);
+  return { items: edges(data.games).map((e) => toGame(e.node)).filter(Boolean) };
+}
+
+/** Weitere beliebte Streams (Startseite weiter unten). Klappt nur mit Integritäts-Prüfung, siehe PAGE. */
 export async function moreStreams({ language = 'de', cursor }) {
   const data = await gql(
     `query($after: Cursor) { streams(first: 24, after: $after, options: ${streamOptions(language)}) { edges { cursor node { ${STREAM_FIELDS} broadcaster { ${USER_FIELDS} } } } pageInfo { hasNextPage } } }`,
@@ -212,11 +249,13 @@ export async function moreStreams({ language = 'de', cursor }) {
 /** Streams einer Kategorie. */
 export async function category(name, { language = '', cursor = null } = {}) {
   const data = await gql(
-    `query($name: String!, $after: Cursor) { game(name: $name) { ${GAME_FIELDS} streams(first: 30, after: $after, options: ${streamOptions(language)}) { edges { cursor node { ${STREAM_FIELDS} broadcaster { ${USER_FIELDS} } } } pageInfo { hasNextPage } } } }`,
-    { name: String(name).slice(0, 200), after: cursor },
+    `query($name: String!) { game(name: $name) { ${GAME_FIELDS} streams(first: ${PAGE}, options: ${streamOptions(language)}) { edges { node { ${STREAM_FIELDS} broadcaster { ${USER_FIELDS} } } } } } }`,
+    { name: String(name).slice(0, 200) },
   );
   if (!data.game) throw new TwitchError('Kategorie nicht gefunden');
-  return { game: toGame(data.game), items: edges(data.game.streams).map((e) => toStream(e.node)).filter(Boolean), next: nextCursor(data.game.streams) };
+  // Kein Weiterblättern (siehe PAGE); [cursor] bleibt nur für ältere Aufrufer
+  void cursor;
+  return { game: toGame(data.game), items: edges(data.game.streams).map((e) => toStream(e.node)).filter(Boolean), next: null };
 }
 
 /** Suche nach Kanälen und Kategorien. Laufende Streams zuerst. */

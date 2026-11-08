@@ -20,6 +20,11 @@
       <button data-platform="youtube" role="tab" title="YouTube" data-icon="youtube"><span>YouTube</span></button>
       <button data-platform="twitch" role="tab" title="Twitch" data-icon="twitch"><span>Twitch</span></button>
     </div>
+    <nav id="twTabs" class="tw-tabs" hidden>
+      <button data-tw="twhome">Startseite</button>
+      <button data-tw="twfollowing">Folge ich</button>
+      <button data-tw="twbrowse">Durchsuchen</button>
+    </nav>
     <form id="searchForm" autocomplete="off">
       <div class="search-box">
         <input id="searchInput" type="search" placeholder="Suchen" spellcheck="false" maxlength="200">
@@ -34,6 +39,9 @@
     </div>
     <div id="castPopover" class="popover" hidden></div>
   </header>
+
+  <!-- Twitch: Seitenleiste wie auf twitch.tv (gefolgte und empfohlene Kanäle) -->
+  <aside id="twSidebar" class="tw-sidebar" hidden></aside>
 
   <main id="views">
     <section id="view-home" class="view active">
@@ -64,11 +72,12 @@
       <div id="channelStatus" class="status"></div>
     </section>
 
-    <section id="view-twhome" class="view">
+    <section id="view-twhome" class="view tw-view">
+      <div id="twFeatured" class="tw-featured" hidden></div>
       <div id="twShelfFollowed" class="shelf" hidden>
-        <div class="shelf-head"><h2>Live – Kanäle, denen du folgst</h2><span class="hint" id="twFollowedHint"></span></div>
-        <div class="grid" id="twFollowedGrid"></div>
-        <div class="sub-chips tw-offline" id="twOfflineChips"></div>
+        <div class="shelf-head"><h2>Live-Kanäle, denen du folgst</h2><span class="hint" id="twFollowedHint"></span></div>
+        <div class="grid tw-grid" id="twFollowedGrid"></div>
+        <div class="tw-more" id="twFollowedMore" hidden></div>
       </div>
       <div id="twShelfContinue" class="shelf" hidden>
         <div class="shelf-head"><h2>Weiter ansehen</h2></div>
@@ -76,37 +85,57 @@
       </div>
       <div class="shelf">
         <div class="shelf-head" id="twPopularHead"></div>
-        <div class="grid" id="twPopularGrid"></div>
+        <div class="grid tw-grid" id="twPopularGrid"></div>
+        <div class="tw-more" id="twPopularMore" hidden></div>
       </div>
       <div class="shelf">
-        <div class="shelf-head"><h2>Kategorien</h2></div>
-        <div class="tw-games" id="twGamesGrid"></div>
+        <div class="shelf-head"><h2>Kategorien, die dir gefallen könnten</h2></div>
+        <div class="tw-games tw-games-one-row" id="twGamesGrid"></div>
+        <div class="tw-more" id="twGamesMore"></div>
       </div>
       <div class="shelf" id="twShelfTop" hidden>
         <div class="shelf-head"><h2>Weltweit beliebt</h2></div>
-        <div class="grid" id="twTopGrid"></div>
+        <div class="grid tw-grid" id="twTopGrid"></div>
       </div>
       <div id="twHomeStatus" class="status"></div>
     </section>
 
-    <section id="view-twsearch" class="view">
+    <section id="view-twfollowing" class="view tw-view">
+      <h1 class="tw-page-title">Folge ich</h1>
+      <div class="tw-page-tabs" id="twFollowingTabs"></div>
+      <div id="twFollowingBody"></div>
+      <div id="twFollowingStatus" class="status"></div>
+    </section>
+
+    <section id="view-twbrowse" class="view tw-view">
+      <h1 class="tw-page-title">Durchsuchen</h1>
+      <div class="tw-page-tabs" id="twBrowseTabs"></div>
+      <div class="tw-browse-bar" id="twBrowseBar"></div>
+      <div id="twBrowseGrid"></div>
+      <div id="twBrowseStatus" class="status"></div>
+    </section>
+
+    <section id="view-twsearch" class="view tw-view">
       <div class="shelf-head" id="twSearchGamesHead" hidden><h2>Kategorien</h2></div>
       <div class="tw-games tw-games-row" id="twSearchGames"></div>
-      <div class="grid" id="twSearchChannels"></div>
+      <div class="shelf-head" id="twSearchChannelsHead" hidden><h2>Kanäle</h2></div>
+      <div class="tw-channel-list" id="twSearchChannels"></div>
       <div id="twSearchStatus" class="status"></div>
     </section>
 
-    <section id="view-twcategory" class="view">
+    <section id="view-twcategory" class="view tw-view">
       <div id="twCategoryHead" class="tw-category-head"></div>
-      <div class="grid" id="twCategoryGrid"></div>
+      <div class="tw-page-tabs" id="twCategoryTabs"></div>
+      <div class="grid tw-grid" id="twCategoryGrid"></div>
       <div id="twCategoryStatus" class="status"></div>
     </section>
 
-    <section id="view-twchannel" class="view">
-      <div id="twChannelHead" class="channel-head"></div>
-      <div id="twChannelLive"></div>
-      <div class="shelf-head" id="twChannelVideosHead" hidden><h2>Vergangene Streams und Videos</h2></div>
-      <div class="grid" id="twChannelGrid"></div>
+    <section id="view-twchannel" class="view tw-view">
+      <div id="twChannelHead" class="tw-channel-head"></div>
+      <div class="tw-page-tabs" id="twChannelTabs"></div>
+      <div id="twChannelBody"></div>
+      <div class="grid tw-grid" id="twChannelGrid"></div>
+      <div class="tw-more" id="twChannelMore" hidden></div>
       <div id="twChannelStatus" class="status"></div>
     </section>
 

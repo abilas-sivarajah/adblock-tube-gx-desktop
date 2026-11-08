@@ -382,7 +382,8 @@ function showView(name) {
   state.view = name;
   for (const v of document.querySelectorAll('.view')) v.classList.toggle('active', v.id === 'view-' + name);
   if (name === 'home') renderHome();
-  if (name === 'twhome') Twitch.renderHome();
+  // Twitch-Seiten füllt twitch-ui.js (und markiert oben "Startseite | Folge ich | Durchsuchen")
+  if (name.startsWith('tw')) Twitch.onShow(name);
   if (name === 'settings') renderSettings();
   if (state.watch === 'full') setWatch('mini');
 }
@@ -408,6 +409,8 @@ function renderPlatform() {
     b.setAttribute('aria-selected', String(on));
   }
   $('searchInput').placeholder = tw ? 'Auf Twitch suchen (Kanäle, Kategorien)' : 'Suchen';
+  // Seitenleiste und Reiter wie auf twitch.tv
+  Twitch.onPlatform(tw);
   $('btnHome').title = tw ? 'Twitch-Startseite' : 'Startseite';
 }
 

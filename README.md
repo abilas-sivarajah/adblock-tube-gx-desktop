@@ -63,10 +63,15 @@ gibt nur niedrige Qualität frei oder ein Video ist altersbeschränkt. Dafür gi
 
 Oben links **YouTube | Twitch** umschalten (GX Tube merkt sich die Wahl):
 
-- **Startseite:** Live-Kanäle, denen du folgst, beliebte Streams (Deutsch, Englisch oder alle Sprachen),
-  Kategorien, „Weiter ansehen“ für VODs. Suche nach Kanälen und Kategorien.
-- **Kanalseite:** läuft gerade ein Stream, steht er oben, darunter die vergangenen Streams (VODs). **Folgen**
-  speichert den Kanal auf dem PC – mit Twitch angemeldet auch in deinem Twitch-Konto.
+- **Aufgebaut wie twitch.tv:** links die **Seitenleiste** mit den Kanälen, denen du folgst (live mit Zuschauern,
+  offline ausgegraut) und empfohlenen Kanälen – einklappbar. Oben **Startseite | Folge ich | Durchsuchen**.
+- **Startseite:** großes Titelbild mit den beliebtesten Streams, Live-Kanäle, denen du folgst, empfohlene
+  Live-Kanäle (Deutsch, Englisch oder alle Sprachen) mit „Mehr anzeigen“, Kategorien, „Weiter ansehen“ für VODs.
+- **Folge ich:** wer gerade live ist, angefangene VODs und alle gefolgten Kanäle.
+- **Durchsuchen:** die meistgeschauten Kategorien und Live-Kanäle. Suche nach Kanälen und Kategorien.
+- **Kanalseite:** Banner, Reiter **Startseite | Videos | Info** – läuft gerade ein Stream, steht er groß oben,
+  darunter die vergangenen Streams (VODs). **Folgen** speichert den Kanal auf dem PC – mit Twitch angemeldet
+  auch in deinem Twitch-Konto.
 - **Ohne Werbung:** Der Werbeblocker aus Adblock GX holt während einer Werbepause den Stream über eine
   zweite, werbefreie Twitch-Sitzung (kurz in 360p, dann wieder in voller Qualität). Findet er keine,
   zeigt er für die Dauer der Werbung ein schwarzes Bild. Werbung wird nie als „gesehen“ gemeldet.

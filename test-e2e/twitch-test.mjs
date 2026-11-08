@@ -81,7 +81,7 @@ try {
   // ---- Kanalname im Player → Kanalseite, folgen
   await win.click('#vChannel');
   await win.waitForSelector('#view-twchannel.active #twChannelHead h1', { timeout: 30_000 });
-  await win.waitForSelector('#twChannelLive .tw-card', { timeout: 30_000 });
+  await win.waitForSelector('#twChannelBody .tw-live-hero', { timeout: 30_000 });
   console.log('[kanal]', await win.locator('#twChannelHead h1').textContent(), '|', await win.locator('#twChannelHead .channel-meta').textContent(), '|', await win.locator('#twChannelGrid .tw-card').count(), 'VODs');
   assert.equal(await win.evaluate(() => document.getElementById('watch').classList.contains('mini')), true, 'Stream läuft im Mini-Player weiter');
   await win.locator('#twChannelHead .tw-follow').click();
@@ -106,12 +106,12 @@ try {
   // ---- Suche
   await win.fill('#searchInput', 'montanablack88');
   await win.press('#searchInput', 'Enter');
-  await win.waitForSelector('#view-twsearch.active #twSearchChannels .card', { timeout: 30_000 });
+  await win.waitForSelector('#view-twsearch.active #twSearchChannels .tw-channel-row', { timeout: 30_000 });
   console.log('[suche]', (await win.locator('#twSearchChannels .card-title').allTextContents()).slice(0, 4).join(', '));
   await shot(win, 'twitch-search.png');
 
   // ---- VOD: Kanal mit Videos öffnen und eins abspielen
-  await win.locator('#twSearchChannels .card', { hasText: 'MontanaBlack88' }).first().click();
+  await win.locator('#twSearchChannels .tw-channel-row', { hasText: 'MontanaBlack88' }).first().click();
   await win.waitForSelector('#view-twchannel.active #twChannelGrid .tw-card', { timeout: 30_000 });
   const vodCard = win.locator('#twChannelGrid .tw-card').first();
   const vodTitle = await vodCard.locator('.card-title').textContent();
