@@ -563,3 +563,21 @@ body.tw-side-collapsed .tw-side-row { justify-content: center; padding: 5px 0; }
 .tw-about h2 { margin: 0 0 6px; font-size: 18px; }
 .tw-about-followers { margin: 0 0 12px; color: var(--text-2); }
 .tw-about-desc { margin: 0 0 16px; white-space: pre-wrap; user-select: text; line-height: 1.5; }
+
+/* Favoriten (Stern) */
+:root { --fav: #f5c518; }
+.tw-fav-badge { position: absolute; right: 8px; top: 8px; z-index: 1; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: rgba(0,0,0,.6); opacity: 0; transition: opacity .12s, transform .1s ease; }
+.tw-fav-badge svg.i { width: 18px; height: 18px; fill: #fff; }
+.tw-card:hover .tw-fav-badge, .tw-fav-badge.on, .tw-fav-badge:focus-visible { opacity: 1; }
+.tw-fav-badge.on svg.i, .tw-fav-badge:hover svg.i { fill: var(--fav); }
+.pill.tw-fav { display: inline-flex; align-items: center; gap: 6px; }
+.pill.tw-fav svg.i { width: 18px; height: 18px; }
+.pill.tw-fav.on svg.i { fill: var(--fav); }
+.tw-fav-title::before { content: "\2605"; color: var(--fav); margin-right: 8px; }
+.tw-fav-offline { margin-top: 16px; }
+.tw-fav-offline:empty { display: none; }
+.tw-channel-tile { position: relative; }
+.tw-tile-star { position: absolute; top: 8px; right: 8px; width: 18px !important; height: 18px !important; fill: var(--fav) !important; }
+.tw-side-head.fav { display: flex; align-items: center; gap: 6px; color: var(--fav); }
+.tw-side-head.fav svg.i { width: 15px; height: 15px; fill: var(--fav); flex: none; }
+body.tw-side-collapsed .tw-side-head.fav { justify-content: center; }

@@ -61,6 +61,8 @@ export class Store {
     this.subscriptions = Array.isArray(lib.subscriptions) ? lib.subscriptions : [];
     // Twitch-Kanäle, denen man folgt: { login, userId, name, avatar, since }
     this.twitchFollows = Array.isArray(lib.twitchFollows) ? lib.twitchFollows : [];
+    // Twitch-Favoriten (Stern) – nur auf diesem PC, unabhängig vom Folgen
+    this.twitchFavorites = Array.isArray(lib.twitchFavorites) ? lib.twitchFavorites : [];
     let dirty = false;
     if (!this.settings.deviceId) {
       this.settings.deviceId = randomUUID();
@@ -103,7 +105,7 @@ export class Store {
 
   saveLibraryNow() {
     clearTimeout(this.libraryTimer);
-    writeJson(this.libraryFile, { history: this.history, recommendations: this.recommendations, searchHistory: this.searchHistory, subscriptions: this.subscriptions, twitchFollows: this.twitchFollows });
+    writeJson(this.libraryFile, { history: this.history, recommendations: this.recommendations, searchHistory: this.searchHistory, subscriptions: this.subscriptions, twitchFollows: this.twitchFollows, twitchFavorites: this.twitchFavorites });
   }
 
   historyEntry(id) {
@@ -197,6 +199,31 @@ export class Store {
     this.twitchFollows = on ? [{ ...old, ...channel, userId: channel.userId || old?.userId || null, avatar: channel.avatar || old?.avatar || null, since: old?.since ?? Date.now() }, ...rest] : rest;
     this.saveLibrarySoon();
     return this.twitchFollows;
+  }
+
+  /** Twitch-Kanal als Favorit markieren bzw. den Stern entfernen (neueste zuerst). */
+  setFavorite(channel, on) {
+    const old = this.twitchFavorites.find((f) => f.login === channel.login);
+    const rest = this.twitchFavorites.filter((f) => f.login !== channel.login);
+    this.twitchFavorites = on
+      ? [{ ...old, ...channel, userId: channel.userId || old?.userId || null, avatar: channel.avatar || old?.avatar || null, since: old?.since ?? Date.now() }, ...rest].slice(0, 500)
+      : rest;
+    this.saveLibrarySoon();
+    return this.twitchFavorites;
+  }
+
+  /** Namen und Bilder der Favoriten auffrischen (aus einer Live-Abfrage). */
+  refreshFavorites(list) {
+    const byLogin = new Map((list ?? []).map((c) => [c.login, c]));
+    let changed = false;
+    this.twitchFavorites = this.twitchFavorites.map((f) => {
+      const c = byLogin.get(f.login);
+      if (!c || ((!c.name || c.name === f.name) && (!c.avatar || c.avatar === f.avatar) && (!c.userId || c.userId === f.userId))) return f;
+      changed = true;
+      return { ...f, name: c.name || f.name, avatar: c.avatar || f.avatar, userId: c.userId || f.userId };
+    });
+    if (changed) this.saveLibrarySoon();
+    return changed;
   }
 
   /** Gefolgte Kanäle aus dem Twitch-Konto dazunehmen (Namen/Bilder werden aufgefrischt). */

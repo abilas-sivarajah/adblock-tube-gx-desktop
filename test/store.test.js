@@ -63,3 +63,22 @@ test('Abos: abonnieren, beenden, aus dem Konto dazunehmen, bleiben gespeichert',
   const again = new Store(dir);
   assert.deepEqual(again.subscriptions.map((c) => c.name).sort(), ['Rick Astley', 'Zwei (neu)']);
 });
+
+test('Twitch-Favoriten: setzen, entfernen, auffrischen, gespeichert', () => {
+  const dir = tmp();
+  const s = new Store(dir);
+  s.setFavorite({ login: 'gronkh', userId: '1', name: 'GRONKH', avatar: null }, true);
+  s.setFavorite({ login: 'trymacs', userId: null, name: 'Trymacs', avatar: null }, true);
+  assert.deepEqual(s.twitchFavorites.map((f) => f.login), ['trymacs', 'gronkh'], 'neueste zuerst');
+  // Nochmal setzen: kein Doppel, Daten bleiben
+  s.setFavorite({ login: 'gronkh', userId: null, name: 'GRONKH', avatar: 'https://x/a.png' }, true);
+  assert.equal(s.twitchFavorites.length, 2);
+  assert.equal(s.twitchFavorites.find((f) => f.login === 'gronkh').userId, '1');
+  assert.equal(s.refreshFavorites([{ login: 'trymacs', userId: '2', name: 'Trymacs', avatar: null }]), true);
+  assert.equal(s.refreshFavorites([{ login: 'trymacs', userId: '2', name: 'Trymacs', avatar: null }]), false, 'nichts Neues');
+  s.setFavorite({ login: 'trymacs' }, false);
+  s.saveLibraryNow();
+  const again = new Store(dir);
+  assert.deepEqual(again.twitchFavorites.map((f) => f.login), ['gronkh']);
+  assert.equal(again.twitchFavorites[0].avatar, 'https://x/a.png');
+});

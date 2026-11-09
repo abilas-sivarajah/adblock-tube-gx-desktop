@@ -15,6 +15,8 @@ const tw = {
   follows: [], // { login, userId, name, avatar }
   home: { data: null, loadedAt: 0, language: null, loading: null },
   followed: { list: [], loadedAt: 0, loading: null },
+  favorites: [], // Stern: { login, userId, name, avatar } – nur auf diesem PC
+  favLive: { list: [], loadedAt: 0, loading: null },
   category: null, // { name, items, shown, loading }
   channel: null, // { login, data, next, loading, tab }
   browse: { tab: 'categories', games: null, streams: null, language: null, shown: 0 },
@@ -39,6 +41,11 @@ export function init(context) {
     tw.followed.loadedAt = 0; // neu laden – jemand kam dazu oder fiel weg
     renderFollowButtons();
   });
+  gx.onTwitchFavorites((list) => {
+    tw.favorites = list;
+    tw.favLive.loadedAt = 0;
+    renderFavoriteButtons();
+  });
   gx.onTwitchLogin(onLoginResult);
   $('twitchDialog').addEventListener('click', (e) => {
     if (e.target === $('twitchDialog')) closeLoginDialog();
@@ -49,9 +56,10 @@ export function init(context) {
   setInterval(() => {
     if (ctx.state.platform === 'twitch' && !document.hidden) renderSidebar({ refresh: true });
   }, 2 * 60 * 1000);
-  return Promise.all([gx.twitchStatus(), gx.twitchFollows()]).then(([a, f]) => {
+  return Promise.all([gx.twitchStatus(), gx.twitchFollows(), gx.twitchFavorites()]).then(([a, f, fav]) => {
     tw.account = a;
     tw.follows = f;
+    tw.favorites = fav;
   });
 }
 
@@ -187,6 +195,24 @@ async function followedData({ force = false } = {}) {
   return f.loading;
 }
 
+/** Favoriten mit Live-Status (live zuerst). */
+async function favoritesData({ force = false } = {}) {
+  const f = tw.favLive;
+  if (!tw.favorites.length) return [];
+  if (!force && Date.now() - f.loadedAt < 60 * 1000) return f.list;
+  f.loading ??= gx
+    .twitchFavoritesLive()
+    .then((list) => {
+      f.list = list;
+      f.loadedAt = Date.now();
+      return list;
+    })
+    .finally(() => {
+      f.loading = null;
+    });
+  return f.loading;
+}
+
 // ------------------------------------------------------------------ Karten
 
 /** Für den Player (Hauptprozess prüft und kürzt). */
@@ -208,6 +234,8 @@ function cardMenu(button, v) {
     items.push({ icon: 'account', label: `Zum Kanal „${v.channelName || v.channelLogin}“`, run: () => openChannel(v.channelLogin, v.channelName) });
     const following = isFollowing(v.channelLogin);
     items.push({ icon: following ? 'heart' : 'heartOutline', label: following ? 'Nicht mehr folgen' : 'Folgen', run: () => toggleFollow({ login: v.channelLogin, userId: v.channelUserId ?? null, name: v.channelName, avatar: v.avatar ?? null }) });
+    const fav = isFavorite(v.channelLogin);
+    items.push({ icon: fav ? 'star' : 'starOutline', label: fav ? 'Aus Favoriten entfernen' : 'Zu Favoriten hinzufügen', run: () => toggleFavorite({ login: v.channelLogin, userId: v.channelUserId ?? null, name: v.channelName, avatar: v.avatar ?? null }) });
   }
   if (v.game?.name) items.push({ icon: 'search', label: `Mehr aus „${v.game.displayName}“`, run: () => openCategory(v.game.name) });
   items.push({ icon: 'open', label: 'Auf twitch.tv öffnen', run: () => gx.openExternal(v.vod ? `https://www.twitch.tv/videos/${v.vod}` : `https://www.twitch.tv/${v.channelLogin}`) });
@@ -238,6 +266,8 @@ export function streamCard(v, { progress = null, showChannel = true } = {}) {
     const meta = [v.views ? `${count(v.views)} Aufrufe` : null, v.publishedAt ? relativeTime(v.publishedAt) : null].filter(Boolean).join(' · ');
     if (meta) thumb.append(el('span', 'tw-viewers', meta));
   }
+  // Stern auf dem Bild – nicht auf der Kanalseite, dort steht er oben beim Kanal
+  if (v.channelLogin && showChannel) thumb.append(favoriteButton({ login: v.channelLogin, userId: v.channelUserId ?? null, name: v.channelName, avatar: v.avatar ?? null }, { small: true }));
   if (progress != null) {
     const bar = el('div', 'progress');
     const fill = el('div');
@@ -336,7 +366,7 @@ function channelRow(c) {
     });
     card.append(watch);
   }
-  card.append(followButton(c));
+  card.append(favoriteButton(c), followButton(c));
   card.addEventListener('click', () => openChannel(c.login, c.name));
   return card;
 }
@@ -349,6 +379,11 @@ function channelTile(c) {
   img.alt = '';
   img.loading = 'lazy';
   tile.append(img, el('div', 'tw-tile-name', c.name));
+  if (isFavorite(c.login)) {
+    const star = icon('star');
+    star.classList.add('tw-tile-star');
+    tile.append(star);
+  }
   tile.append(el('div', 'card-meta', c.live ? `🔴 ${c.live.game?.displayName || 'Live'}` : 'Offline'));
   tile.title = c.live?.title || c.name;
   tile.addEventListener('click', () => (c.live ? play(c.live) : openChannel(c.login, c.name)));
@@ -399,6 +434,79 @@ function renderFollowButtons() {
   if (ctx?.state.platform === 'twitch') renderSidebar({ refresh: true });
   if (ctx?.state.view === 'twhome') renderFollowed();
   if (ctx?.state.view === 'twfollowing') renderFollowing();
+}
+
+// ------------------------------------------------------------------ Favoriten (Stern)
+
+const isFavorite = (login) => tw.favorites.some((f) => f.login === login);
+
+/** Stern-Knopf; bleibt über data-fav aktuell. [small]: runder Knopf auf dem Vorschaubild. */
+export function favoriteButton(c, { small = false } = {}) {
+  const btn = el('button');
+  btn.dataset.fav = c.login;
+  if (small) btn.dataset.small = '1';
+  fillFavoriteButton(btn);
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleFavorite(c, btn);
+  });
+  return btn;
+}
+
+function fillFavoriteButton(btn) {
+  const on = isFavorite(btn.dataset.fav);
+  const small = btn.dataset.small === '1';
+  btn.className = small ? 'tw-fav-badge' + (on ? ' on' : '') : 'pill ghost tw-fav' + (on ? ' on' : '');
+  btn.replaceChildren(icon(on ? 'star' : 'starOutline'));
+  if (!small) btn.append(el('span', null, on ? 'Favorit' : 'Favorisieren'));
+  btn.title = on ? 'Aus Favoriten entfernen' : 'Als Favorit markieren';
+}
+
+async function toggleFavorite(c, btn = null) {
+  const on = !isFavorite(c.login);
+  if (btn) btn.disabled = true;
+  try {
+    await gx.twitchSetFavorite({ login: c.login, userId: c.userId ?? null, name: c.name || c.login, avatar: c.avatar ?? null }, on);
+    ctx.toast(on ? `★ ${c.name || c.login} ist jetzt ein Favorit` : `${c.name || c.login} ist kein Favorit mehr`);
+  } catch (err) {
+    ctx.toast('Favorit konnte nicht gespeichert werden: ' + ctx.cleanError(err));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function renderFavoriteButtons() {
+  for (const btn of document.querySelectorAll('[data-fav]')) fillFavoriteButton(btn);
+  if (ctx?.state.platform === 'twitch') renderSidebar({ refresh: true });
+  if (ctx?.state.view === 'twhome') {
+    renderFavoritesShelf();
+    renderFollowed();
+  }
+  if (ctx?.state.view === 'twfollowing') renderFollowing();
+}
+
+let favSeq = 0;
+
+/** Startseite: "Deine Favoriten" – wer live ist als Karte, die übrigen als kleine Kacheln. */
+async function renderFavoritesShelf() {
+  const shelf = $('twShelfFavorites');
+  if (!tw.favorites.length) {
+    shelf.hidden = true;
+    return;
+  }
+  shelf.hidden = false;
+  const seq = ++favSeq;
+  if (!$('twFavoritesGrid').childElementCount && !$('twFavoritesOffline').childElementCount) $('twFavoritesHint').textContent = 'Lädt …';
+  try {
+    const list = await favoritesData();
+    if (seq !== favSeq) return;
+    const live = list.filter((c) => c.live);
+    $('twFavoritesGrid').replaceChildren(...live.map((c) => streamCard(c.live)));
+    $('twFavoritesOffline').replaceChildren(...list.filter((c) => !c.live).map(channelTile));
+    $('twFavoritesHint').textContent = live.length ? `${live.length} von ${list.length} live` : 'Gerade ist keiner live';
+  } catch {
+    if (seq === favSeq) $('twFavoritesHint').textContent = 'Konnte nicht geladen werden';
+  }
 }
 
 // ------------------------------------------------------------------ Seitenleiste
@@ -454,8 +562,15 @@ export async function renderSidebar({ refresh = false } = {}) {
   const box = $('twSidebar');
   if (!box || ctx.state.platform !== 'twitch') return;
   const seq = ++sidebar.seq;
-  const [followed, home] = await Promise.all([followedData({ force: refresh }).catch(() => tw.followed.list), homeData().catch(() => null)]);
+  const [allFollowed, favorites, home] = await Promise.all([
+    followedData({ force: refresh }).catch(() => tw.followed.list),
+    favoritesData({ force: refresh }).catch(() => tw.favLive.list),
+    homeData().catch(() => null),
+  ]);
   if (seq !== sidebar.seq) return;
+  // Favoriten stehen in ihrer eigenen Rubrik – nicht doppelt bei den gefolgten
+  const favLogins = new Set(favorites.map((c) => c.login));
+  const followed = allFollowed.filter((c) => !favLogins.has(c.login));
 
   const toggle = el('button', 'icon-btn tw-side-toggle');
   toggle.title = sidebar.collapsed ? 'Seitenleiste ausklappen' : 'Seitenleiste einklappen';
@@ -465,6 +580,13 @@ export async function renderSidebar({ refresh = false } = {}) {
   if (!sidebar.collapsed) top.append(el('span', null, 'Für dich'));
   top.append(toggle);
   const parts = [top];
+
+  if (favorites.length) {
+    const head = sideHead(sidebar.collapsed ? '' : 'Favoriten');
+    head.classList.add('fav');
+    head.prepend(icon('star'));
+    parts.push(head, ...favorites.map(sideRow));
+  }
 
   if (followed.length) {
     parts.push(sideHead(sidebar.collapsed ? '♥' : 'Kanäle, denen du folgst'));
@@ -480,13 +602,13 @@ export async function renderSidebar({ refresh = false } = {}) {
     }
   }
   // Empfohlen: beliebte Streams, denen du noch nicht folgst
-  const followedLogins = new Set(followed.map((c) => c.login));
-  const reco = (home?.streams ?? []).filter((v) => !followedLogins.has(v.channelLogin)).slice(0, followed.length ? 6 : 12);
+  const followedLogins = new Set([...allFollowed.map((c) => c.login), ...favLogins]);
+  const reco = (home?.streams ?? []).filter((v) => !followedLogins.has(v.channelLogin)).slice(0, followed.length || favorites.length ? 6 : 12);
   if (reco.length) {
     parts.push(sideHead(sidebar.collapsed ? '★' : 'Empfohlene Kanäle'));
     parts.push(...reco.map((v) => sideRow({ login: v.channelLogin, name: v.channelName, avatar: v.avatar, live: v })));
   }
-  if (!followed.length && !sidebar.collapsed) {
+  if (!followed.length && !favorites.length && !sidebar.collapsed) {
     parts.push(el('p', 'tw-side-hint', 'Folge Kanälen, um hier zu sehen, wer gerade live ist.'));
   }
   box.replaceChildren(...parts);
@@ -500,6 +622,7 @@ let featuredIndex = 0;
 let featuredTimer = null;
 
 export async function renderHome({ force = false } = {}) {
+  renderFavoritesShelf();
   renderFollowed();
   renderContinue();
   const seq = ++homeSeq;
@@ -632,7 +755,8 @@ async function renderFollowed() {
   try {
     const list = await followedData();
     if (seq !== followedSeq) return;
-    const live = list.filter((c) => c.live);
+    // Favoriten haben oben ihre eigene Reihe
+    const live = list.filter((c) => c.live && !isFavorite(c.login));
     shelf.hidden = live.length === 0;
     $('twFollowedGrid').replaceChildren(...live.slice(0, FOLLOWED_ROW).map((c) => streamCard(c.live)));
     $('twFollowedHint').textContent = `${live.length} live`;
@@ -665,19 +789,20 @@ let followingSeq = 0;
 
 export async function renderFollowing() {
   const seq = ++followingSeq;
-  pageTabs($('twFollowingTabs'), [['overview', 'Übersicht'], ['live', 'Live'], ['channels', 'Kanäle']], followingTab, (t) => {
+  pageTabs($('twFollowingTabs'), [['overview', 'Übersicht'], ['favorites', 'Favoriten'], ['live', 'Live'], ['channels', 'Kanäle']], followingTab, (t) => {
     followingTab = t;
     renderFollowing();
   });
   const body = $('twFollowingBody');
-  if (!tw.follows.length) {
+  if (followingTab === 'favorites') return renderFavoritesTab(seq);
+  if (!tw.follows.length && !tw.favorites.length) {
     body.replaceChildren();
     $('twFollowingStatus').textContent = 'Du folgst noch niemandem. Such oben nach einem Kanal und tippe auf „Folgen“ – oder melde dich in den Einstellungen bei Twitch an, dann kommen deine gefolgten Kanäle von dort.';
     return;
   }
   $('twFollowingStatus').textContent = body.childElementCount ? '' : 'Lädt …';
   try {
-    const [list, cont] = await Promise.all([followedData(), continueVods()]);
+    const [list, cont, favs] = await Promise.all([followedData(), continueVods(), favoritesData()]);
     if (seq !== followingSeq) return;
     const live = list.filter((c) => c.live);
     const parts = [];
@@ -689,6 +814,18 @@ export async function renderFollowing() {
       s.append(head, content);
       return s;
     };
+    if (followingTab === 'overview' && favs.length) {
+      const favLive = favs.filter((c) => c.live);
+      const box = el('div');
+      const grid = el('div', 'grid tw-grid');
+      grid.append(...favLive.map((c) => streamCard(c.live)));
+      const tiles = el('div', 'tw-tiles tw-fav-offline');
+      tiles.append(...favs.filter((c) => !c.live).map(channelTile));
+      box.append(grid, tiles);
+      const s = shelf('Favoriten', favLive.length ? `${favLive.length} live` : 'Gerade ist keiner live', box);
+      s.querySelector('h2').classList.add('tw-fav-title');
+      parts.push(s);
+    }
     if (followingTab !== 'channels') {
       const grid = el('div', 'grid tw-grid');
       grid.append(...live.map((c) => streamCard(c.live)));
@@ -706,6 +843,38 @@ export async function renderFollowing() {
       parts.push(shelf('Alle Kanäle, denen du folgst', `${list.length}`, tiles));
     }
     body.replaceChildren(...parts);
+    $('twFollowingStatus').textContent = '';
+  } catch (err) {
+    if (seq === followingSeq) $('twFollowingStatus').textContent = 'Konnte nicht geladen werden: ' + ctx.cleanError(err);
+  }
+}
+
+/** Folge ich → Favoriten: alle Kanäle mit Stern, live oben. */
+async function renderFavoritesTab(seq) {
+  const body = $('twFollowingBody');
+  if (!tw.favorites.length) {
+    body.replaceChildren();
+    $('twFollowingStatus').textContent = 'Noch keine Favoriten. Klicke bei einem Kanal oder Stream auf den Stern – dann steht er hier und ganz oben in der Seitenleiste.';
+    return;
+  }
+  $('twFollowingStatus').textContent = body.childElementCount ? '' : 'Lädt …';
+  try {
+    const favs = await favoritesData();
+    if (seq !== followingSeq) return;
+    const live = favs.filter((c) => c.live);
+    const grid = el('div', 'grid tw-grid');
+    grid.append(...live.map((c) => streamCard(c.live)));
+    const tiles = el('div', 'tw-tiles');
+    tiles.append(...favs.map(channelTile));
+    const head1 = el('div', 'shelf-head');
+    head1.append(el('h2', null, 'Jetzt live'), el('span', 'hint', live.length ? `${live.length} live` : 'Gerade ist keiner live'));
+    const head2 = el('div', 'shelf-head');
+    head2.append(el('h2', null, 'Alle Favoriten'), el('span', 'hint', String(favs.length)));
+    const s1 = el('div', 'shelf');
+    s1.append(head1, grid);
+    const s2 = el('div', 'shelf');
+    s2.append(head2, tiles);
+    body.replaceChildren(s1, s2);
     $('twFollowingStatus').textContent = '';
   } catch (err) {
     if (seq === followingSeq) $('twFollowingStatus').textContent = 'Konnte nicht geladen werden: ' + ctx.cleanError(err);
@@ -1008,7 +1177,8 @@ function renderChannelHead() {
     watch.addEventListener('click', () => play(d.live));
     actions.append(watch);
   }
-  actions.append(followButton({ login: d.login, userId: d.userId ?? null, name: d.name, avatar: d.avatar }));
+  const chRef = { login: d.login, userId: d.userId ?? null, name: d.name, avatar: d.avatar };
+  actions.append(favoriteButton(chRef), followButton(chRef));
   info.append(av, text, actions);
   parts.push(info);
   head.replaceChildren(...parts);

@@ -533,6 +533,24 @@ async function setTwitchFollow(channel, on) {
   return { following: on, synced, error };
 }
 
+/** Favoriten (Stern) setzen/entfernen – nur auf diesem PC. */
+function setTwitchFavorite(channel, on) {
+  const c = sanitizeTwitchChannel(channel);
+  store.setFavorite(c, on);
+  send('twitch:favorites', store.twitchFavorites);
+  return { favorite: on };
+}
+
+/** Favoriten mit Live-Status (live zuerst, nach Zuschauern). */
+async function twitchFavoritesLive() {
+  const list = await TW.users(store.twitchFavorites.map((f) => f.login));
+  const byLogin = new Map(list.map((c) => [c.login, c]));
+  if (store.refreshFavorites(list)) send('twitch:favorites', store.twitchFavorites);
+  return store.twitchFavorites
+    .map((f) => byLogin.get(f.login) ?? { kind: 'channel', platform: 'twitch', login: f.login, userId: f.userId, name: f.name, avatar: f.avatar, live: null })
+    .sort((a, b) => (b.live?.viewers ?? -1) - (a.live?.viewers ?? -1));
+}
+
 /** Gefolgte Kanäle mit Live-Status (live zuerst, nach Zuschauern). */
 async function twitchFollowed() {
   const list = await TW.users(store.twitchFollows.map((f) => f.login));
@@ -1058,6 +1076,9 @@ function setupIpc() {
   ipcMain.handle('tw:channelMore', (_e, login, cursor) => TW.channelMore(String(login), String(cursor)));
   ipcMain.handle('tw:follows', () => store.twitchFollows);
   ipcMain.handle('tw:followed', () => twitchFollowed());
+  ipcMain.handle('tw:favorites', () => store.twitchFavorites);
+  ipcMain.handle('tw:favoritesLive', () => twitchFavoritesLive());
+  ipcMain.handle('tw:setFavorite', (_e, channel, on) => setTwitchFavorite(channel, on === true));
   ipcMain.handle('tw:setFollow', (_e, channel, on) => setTwitchFollow(channel, on === true));
   ipcMain.handle('tw:syncFollows', () => syncTwitchFollows({ report: true }));
   ipcMain.handle('twitch:status', () => TwitchAccount.status());
