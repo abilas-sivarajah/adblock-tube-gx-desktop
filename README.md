@@ -78,7 +78,8 @@ Oben links **YouTube | Twitch** umschalten (GX Tube merkt sich die Wahl):
 - **Ohne Werbung:** Der Werbeblocker aus Adblock GX überspringt Werbepausen: Der Stream läuft über eine
   zweite, werbefreie Twitch-Sitzung weiter (sofort in 360p – zwei getrennte Sitzungen als Android- und
   iOS-App –, dann wieder in voller Qualität). Nur wenn Twitch überall Werbung zeigt, kommt für die Dauer
-  der Werbung ein schwarzes Bild. Werbung wird nie als „gesehen“ gemeldet.
+  der Werbung ein schwarzes Bild. Zuerst wird die Werbung per Ad-Spoofing als „gesehen“ gemeldet – oft endet
+  die Pause dann sofort ohne Wechsel. Abschaltbar unter Einstellungen → Twitch („Werbung als gesehen melden“).
 - **Chat** rechts neben Live-Streams (mit 7TV-, BTTV- und FFZ-Emotes): startet ausgeblendet, mit **c**, dem
   Chat-Knopf oder vom Handy ein-/ausblenden.
   Mitlesen geht ohne Konto, **schreiben** mit Twitch-Anmeldung.

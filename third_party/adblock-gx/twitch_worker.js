@@ -60,6 +60,8 @@
     const GQL_EVENT_HASH = '7e6c69e6eb59f8ccb97ab73686f3d8b7d85a72a0298745ccd8bfc68e4054ca5b';
     const spoofedAdIds = new Set();
     const recentSpoofedAdIds = new Map(); // adId -> timestamp, capped at 50
+    const failedSpoofAt = new Map();      // adId -> time of the last failed attempt (no retry on every refresh)
+    const SPOOF_RETRY_MS = 60000;
 
     function randomHex(n) {
         let s = '';
@@ -241,6 +243,9 @@
                 continue;
             }
             if (ctxSpoofed.has(stitchedAdId)) continue;
+            // failed a moment ago: do not hold up every playlist refresh with the same doomed requests
+            const failedAt = failedSpoofAt.get(stitchedAdId);
+            if (failedAt && now - failedAt < SPOOF_RETRY_MS) continue;
 
             const rollType = (attr['X-TV-TWITCH-AD-ROLL-TYPE'] || 'midroll').toLowerCase();
             const adPos = parseInt(attr['X-TV-TWITCH-AD-POD-POSITION'] || String(i), 10) || 0;
@@ -317,12 +322,19 @@
                 } catch (err) {}
             }
             if (ok) {
+                failedSpoofAt.delete(stitchedAdId);
                 spoofedAny = true;
                 report('ad-spoofed', {count: 1, id: stitchedAdId, roll: rollType});
             } else {
                 ctxSpoofed.delete(stitchedAdId);
                 spoofedAdIds.delete(stitchedAdId);
                 recentSpoofedAdIds.delete(stitchedAdId);
+                failedSpoofAt.set(stitchedAdId, now);
+                while (failedSpoofAt.size > 50) {
+                    const oldest = failedSpoofAt.keys().next().value;
+                    if (oldest === undefined) break;
+                    failedSpoofAt.delete(oldest);
+                }
                 report('error', {error: 'Ad spoofing failed'});
             }
         }
@@ -1177,8 +1189,10 @@
             const n = parseInt((url.match(/[?&]n=(\d+)/) || [])[1] || '1', 10);
             return new Response(holdSegment(n), {status: 200, headers: {'Content-Type': 'video/mp2t', 'Cache-Control': 'no-store'}});
         }
+        // Twitch's ad-server requests (VAST etc.): on VODs they start client-side ads; on live streams the
+        // ads are stitched into the playlist anyway, so blocking them there costs nothing either
         if (isVodAdRequest(url, input && input.method ? input : init)) {
-            report('vod-ad-blocked');
+            report(pageIsVod ? 'vod-ad-blocked' : 'ad-request-blocked');
             return new Response(null, {status: 204});
         }
         const usher = usherContext(url);
@@ -1213,6 +1227,7 @@
         notifyAdComplete: notifyAdComplete,
         spoofedAdIds: spoofedAdIds,
         recentSpoofedAdIds: recentSpoofedAdIds,
+        failedSpoofAt: failedSpoofAt,
         setAdSpoofing: function (on) { adSpoofing = !!on; },
         viewer: viewer
     };

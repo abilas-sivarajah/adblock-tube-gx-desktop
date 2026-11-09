@@ -22,6 +22,7 @@ export const DEFAULT_SETTINGS = {
   historyEnabled: true,
   platform: 'youtube', // was beim Start offen ist: 'youtube' oder 'twitch'
   twitchLanguage: 'de', // beliebte Twitch-Streams: 'de', 'en' oder '' (alle Sprachen)
+  twitchAdSpoofing: true, // Twitch-Werbung zuerst als gesehen melden (Ad-Spoofing), sonst nur Ersatz-Sitzungen
   twitchChatOpen: false, // Chat neben Twitch-Live-Streams gleich zeigen (sonst ausgeblendet)
   remotePower: true, // Handy darf den PC neu starten und herunterfahren
 };

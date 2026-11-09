@@ -294,11 +294,12 @@ export class Player {
     // Shaka meldet Ladefehler als "behebbar" und versucht es endlos weiter. Ein einzelner Aussetzer
     // ist egal – lehnt YouTube aber ab (403) oder scheitert es wiederholt, hilft nur ein anderer Client.
     if (err?.severity !== undefined && err.severity !== shaka.util.Error.Severity.CRITICAL) {
-      if (this.kind === 'twitch' && this.isLive && (http || err?.category === 1 || err?.category === 3)) this.onStalled();
       if (!http) return;
       const now = Date.now();
       this.httpErrors = (this.httpErrors ?? []).filter((t) => now - t < 30_000);
       this.httpErrors.push(now);
+      // Twitch: erst wiederholte Ladefehler zählen als Hänger (ein einzelner Aussetzer würde sonst die Quelle wechseln)
+      if (this.kind === 'twitch' && this.isLive && this.httpErrors.length >= 2) this.onStalled();
       if (status !== 403 && status !== 410 && this.httpErrors.length < 3) {
         console.warn('Player-Hinweis', code, status ?? '');
         return;

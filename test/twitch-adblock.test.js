@@ -11,7 +11,7 @@ const T0 = 1_792_872_000_000;
 const ALL_HQ = ['popout', 'frontpage', 'mobile_web', 'site'];
 
 /** Nachgebautes Twitch: jede Sitzung (playerType) hat ihre eigene Playlist, mit oder ohne Werbung. */
-function fakeTwitch({ clearOnSpoof = false, tailLiveOnSpoof = false } = {}) {
+function fakeTwitch({ clearOnSpoof = false, tailLiveOnSpoof = false, failSpoof = false } = {}) {
   const tw = { head: 50, ads: new Set(), tailLive: new Set(), lag: {}, tokens: [], spoofCalls: [], events: [] };
   const offsetOf = (s) => [...s].reduce((a, c) => a + c.charCodeAt(0), 0) * 10; // jede Sitzung nummeriert anders
   tw.playlist = (session) => {
@@ -37,6 +37,7 @@ function fakeTwitch({ clearOnSpoof = false, tailLiveOnSpoof = false } = {}) {
       const parsed = JSON.parse(init.body);
       if (Array.isArray(parsed) && parsed[0]?.operationName === 'ClientSideAdEventHandling_RecordAdEvent') {
         tw.spoofCalls.push({ headers: init.headers, batch: parsed });
+        if (failSpoof) return new Response(JSON.stringify(parsed.map(() => ({ errors: [{ message: 'service error' }] }))), { status: 200 });
         if (clearOnSpoof) tw.ads.delete('native');
         if (tailLiveOnSpoof) {
           tw.ads.delete('native');
@@ -167,4 +168,30 @@ test('Prefetch-Werbung am Playlist-Ende wird herausgefiltert, Live-Prefetch blei
     '#EXT-X-TWITCH-PREFETCH:https://video-edge.example/native/11.ts\n';
   const parsed = tw.testApi.parseMedia(raw, 'https://video-weaver.example/native.m3u8');
   assert.deepEqual([...parsed.tail], ['#EXT-X-TWITCH-PREFETCH:https://video-edge.example/native/11.ts']);
+});
+
+test('Ad-Spoofing fehlgeschlagen: kein neuer Versuch bei jeder Aktualisierung, Ersatz-Sitzung übernimmt', async () => {
+  const tw = fakeTwitch({ failSpoof: true });
+  await tw.start();
+  await tw.refresh();
+  tw.ads.add('native');
+  tw.head++;
+  const p = await tw.refresh();
+  assert.equal(tw.spoofCalls.length, 1, 'einmal versucht');
+  assert.ok(!p.segs.some((s) => s.ad), 'Werbung trotzdem weg (Ersatz-Sitzung)');
+  await tw.refresh();
+  await tw.refresh();
+  assert.equal(tw.spoofCalls.length, 1, 'gleiche Werbung nicht sofort wieder gemeldet');
+});
+
+test('Ad-Spoofing abgeschaltet: nichts wird gemeldet', async () => {
+  const tw = fakeTwitch({ clearOnSpoof: true });
+  tw.testApi.setAdSpoofing(false);
+  await tw.start();
+  await tw.refresh();
+  tw.ads.add('native');
+  tw.head++;
+  const p = await tw.refresh();
+  assert.equal(tw.spoofCalls.length, 0);
+  assert.ok(!p.segs.some((s) => s.ad));
 });

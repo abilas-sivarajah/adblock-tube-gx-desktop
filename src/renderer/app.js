@@ -62,6 +62,7 @@ async function boot() {
   bindEvents();
   bindChat();
   bindAdBlock();
+  notifyAdBlock({ event: 'spoofing', enabled: settings.twitchAdSpoofing !== false });
 
   renderCastButton();
   renderPlatform();
@@ -143,6 +144,7 @@ function bindEvents() {
   });
   gx.onSettings((s) => {
     state.settings = s;
+    notifyAdBlock({ event: 'spoofing', enabled: s.twitchAdSpoofing !== false });
     if (state.view === 'settings') renderSettings();
   });
   gx.onToast(toast);
@@ -201,6 +203,7 @@ function onSource({ token, stream, startMs, maxQuality }) {
   state.stream = stream;
   if (stream?.kind === 'twitch') {
     notifyAdBlock({ event: 'viewer', headers: stream.viewer ?? {}, vod: !stream.isLive });
+    notifyAdBlock({ event: 'spoofing', enabled: state.settings?.twitchAdSpoofing !== false });
   }
   player.load({ token, stream, startMs, maxQuality });
   renderQualityButton();
@@ -1205,6 +1208,7 @@ function toggleRow(label, hint, key) {
   input.addEventListener('change', async () => {
     state.settings = await gx.setSettings({ [key]: input.checked });
     if (key === 'sponsorBlock') renderSettings();
+    if (key === 'twitchAdSpoofing') notifyAdBlock({ event: 'spoofing', enabled: state.settings.twitchAdSpoofing !== false });
   });
   t.append(input, el('span', 'track'));
   row.append(l, t);
@@ -1292,6 +1296,7 @@ async function renderSettings() {
   adLabel.append(el('b', null, 'Twitch-Werbeblocker'), el('span', null, 'Aus Adblock GX: überspringt Werbepausen – der Stream läuft über eine werbefreie zweite Sitzung weiter. Nur wenn Twitch überall Werbung zeigt, kommt so lange ein schwarzes Bild. Immer an.'));
   adRow.append(adLabel, el('span', 'chip', 'Aktiv'));
   f.append(adRow);
+  f.append(toggleRow('Werbung als gesehen melden', 'Ad-Spoofing: meldet Twitch-Werbung sofort als angesehen, damit der Stream ohne Wechsel weiterläuft. Nutzt dein Konto, wenn du angemeldet bist – aus, wenn du das nicht willst; dann übernehmen allein die Ersatz-Sitzungen', 'twitchAdSpoofing'));
 
   f.append(el('h3', null, 'Programm'));
   f.append(toggleRow('Im Hintergrund weiterlaufen', 'Schließen legt GX Tube in den Infobereich – das Handy findet den PC dann weiterhin', 'closeToTray'));
