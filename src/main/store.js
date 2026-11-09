@@ -12,6 +12,10 @@ export const DEFAULT_SETTINGS = {
   autoplay: true,
   sponsorBlock: true,
   sponsorCategories: ['sponsor', 'selfpromo', 'interaction'],
+  captions: false, // Untertitel automatisch einschalten (in der Sprache unten, sonst die erste)
+  captionLang: 'de',
+  dearrow: false, // DeArrow: Titel und Vorschaubilder ohne Clickbait (Community)
+  returnDislike: false, // Return YouTube Dislike: Dislike-Zahl im Info-Bereich
   volume: 100,
   speed: 1,
   fullscreenOnCast: false,

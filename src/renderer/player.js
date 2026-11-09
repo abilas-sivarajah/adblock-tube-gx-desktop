@@ -1,9 +1,10 @@
 // Videoplayer: Shaka Player für DASH (getrennte Video-/Tonspur) und HLS (Live),
-// plus SponsorBlock und Zustandsmeldungen an den Hauptprozess (→ Handy).
+// plus SponsorBlock, Untertitel und Zustandsmeldungen an den Hauptprozess (→ Handy).
 
 /* global shaka */
 
 import { attachSabr } from './sabr.js';
+import { parseEmsgSegmentMetadata } from './vendor/googlevideo.js';
 
 const REPORT_EVERY_MS = 1000;
 
@@ -55,6 +56,12 @@ export class Player {
     this.shaka = null;
     this.sabr = null; // SABR-Adapter des aktuellen Videos (nur bei kind 'sabr')
     this.stallTimer = null;
+    this.videoId = null;
+    this.mutedBySponsor = null; // { wasMuted } solange ein SponsorBlock-Abschnitt stumm geschaltet ist
+    this.lastSkip = null; // zuletzt übersprungener Abschnitt (für "Rückgängig")
+    this.adRanges = []; // serverseitig eingefügte Werbung (ms im Video), aus den emsg-Daten erkannt
+    this.captions = new Map(); // geladene Untertitel: Schlüssel → <track>-Element
+    this.caption = null; // Schlüssel der gezeigten Untertitel
   }
 
   #dropSabr() {
@@ -73,6 +80,7 @@ export class Player {
     await this.shaka.attach(this.video);
     this.shaka.getNetworkingEngine().registerRequestFilter((type, request) => this.#filterRequest(request));
     this.shaka.getNetworkingEngine().registerResponseFilter((type, response) => this.#filterResponse(type, response));
+    this.shaka.getNetworkingEngine().registerResponseFilter((type, response, context) => this.#detectStitchedAd(type, response, context));
     this.shaka.addEventListener('error', (e) => this.#onShakaError(e.detail));
     this.shaka.addEventListener('adaptation', () => this.onTracks());
     this.shaka.addEventListener('variantchanged', () => this.onTracks());
@@ -220,6 +228,7 @@ export class Player {
     this.token = token;
     this.segments = [];
     this.skipped.clear();
+    this.#resetVideoState();
     this.status = 'loading';
     this.onStatus('loading');
     const seq = ++this.loadSeq;
@@ -234,6 +243,8 @@ export class Player {
     this.httpErrors = [];
     this.token = token;
     this.kind = stream.kind;
+    this.#resetVideoState();
+    this.videoId = stream.id ?? null;
     this.isLive = stream.kind === 'hls' || (stream.kind === 'twitch' && stream.isLive);
     this.fixedHeight = 0;
     this.maxQuality = maxQuality || 1080;
@@ -279,6 +290,7 @@ export class Player {
   async stop() {
     ++this.loadSeq;
     clearTimeout(this.stallTimer);
+    this.#resetVideoState();
     this.token = null;
     this.status = 'idle';
     this.onStatus('idle');
@@ -318,28 +330,160 @@ export class Player {
 
   // ---------------------------------------------------------------- SponsorBlock
 
+  /** Neues Video: Stummschaltung zurück, Untertitel und erkannte Werbung vergessen. */
+  #resetVideoState() {
+    if (this.mutedBySponsor) this.video.muted = this.mutedBySponsor.wasMuted;
+    this.mutedBySponsor = null;
+    this.lastSkip = null;
+    this.adRanges = [];
+    for (const el of this.captions.values()) {
+      URL.revokeObjectURL(el.src);
+      el.remove();
+    }
+    this.captions = new Map();
+    this.caption = null;
+  }
+
   setSegments(segments) {
     this.segments = Array.isArray(segments) ? segments : [];
     this.#skipSponsors();
   }
 
+  /**
+   * Stelle im Video zu einer SponsorBlock-Zeit: Hat YouTube vorher Werbung in den Stream geschnitten,
+   * verschiebt sich alles um deren Länge.
+   */
+  #media(ms) {
+    let out = ms;
+    for (const r of this.adRanges) {
+      if (r.startMs <= out) out += r.endMs - r.startMs;
+      else break;
+    }
+    return out;
+  }
+
   #skipSponsors() {
-    if (!this.segments.length || this.video.paused) return;
+    if (this.video.paused) return;
     const pos = this.positionMs;
-    const seg = this.segments.find((s) => pos >= s.startMs && pos < s.endMs - 500 && !this.skipped.has(s.uuid));
+    // Serverseitig eingefügte Werbung: einfach dahinter springen
+    const ad = this.adRanges.find((r) => pos >= r.startMs && pos < r.endMs - 250);
+    if (ad) {
+      this.video.currentTime = ad.endMs / 1000;
+      if (!ad.reported) {
+        ad.reported = true;
+        this.onSkip({ label: 'Eingefügte Werbung', category: 'ad', ad: true });
+      }
+      return;
+    }
+    if (!this.segments.length) return;
+    // Abschnitte zum Stummschalten (z. B. eingesprochene Werbung in Musikvideos)
+    const mute = this.segments.find((s) => s.action === 'mute' && pos >= this.#media(s.startMs) && pos < this.#media(s.endMs));
+    if (mute && !this.mutedBySponsor) {
+      this.mutedBySponsor = { wasMuted: this.video.muted };
+      this.video.muted = true;
+      this.onSkip({ ...mute, muted: true });
+    } else if (!mute && this.mutedBySponsor) {
+      this.video.muted = this.mutedBySponsor.wasMuted;
+      this.mutedBySponsor = null;
+    }
+    const seg = this.segments.find((s) => s.action !== 'mute' && pos >= this.#media(s.startMs) && pos < this.#media(s.endMs) - 500 && !this.skipped.has(s.uuid));
     if (!seg) return;
     this.skipped.add(seg.uuid);
-    let endMs = seg.endMs;
+    let endMs = this.#media(seg.endMs);
     // Direkt anschließende oder überlappende Segmente in einem einzigen Sprung mitnehmen
     while (true) {
-      const next = this.segments.find((s) => !this.skipped.has(s.uuid) && s.startMs <= endMs + 500 && s.endMs > endMs);
+      const next = this.segments.find((s) => s.action !== 'mute' && !this.skipped.has(s.uuid) && this.#media(s.startMs) <= endMs + 500 && this.#media(s.endMs) > endMs);
       if (!next) break;
       this.skipped.add(next.uuid);
-      endMs = next.endMs;
+      endMs = this.#media(next.endMs);
     }
     const dur = this.durationMs;
     this.video.currentTime = (dur > 0 ? Math.min(endMs, dur) : endMs) / 1000;
+    this.lastSkip = { seg, at: Date.now() };
     this.onSkip(seg);
+  }
+
+  /** Den zuletzt übersprungenen Abschnitt doch ansehen (bleibt als übersprungen markiert). */
+  undoSkip() {
+    const last = this.lastSkip;
+    if (!last || Date.now() - last.at > 15_000) return false;
+    this.lastSkip = null;
+    this.video.currentTime = this.#media(last.seg.startMs) / 1000;
+    return true;
+  }
+
+  /** Zum Höhepunkt (SponsorBlock-Highlight) springen. */
+  seekToHighlight(ms) {
+    this.seek(this.#media(ms));
+  }
+
+  /** emsg-Daten der SABR-Stücke: Stücke eines anderen Videos sind eingefügte Werbung. */
+  #detectStitchedAd(type, response, context) {
+    if (this.kind !== 'sabr' || type !== shaka.net.NetworkingEngine.RequestType.SEGMENT) return;
+    const data = response?.data;
+    if (!data || !data.byteLength) return;
+    let meta;
+    try {
+      meta = parseEmsgSegmentMetadata(data instanceof Uint8Array ? data : new Uint8Array(data));
+    } catch {
+      return;
+    }
+    if (!meta?.hasStitchedAdBreakMetadata?.()) return;
+    const stitched = meta.data?.['Stitched-Video-Id'];
+    if (!stitched || stitched === this.videoId) return;
+    const ref = context?.segment;
+    const start = ref?.getStartTime?.();
+    const end = ref?.getEndTime?.();
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+    this.#addAdRange(Math.round(start * 1000), Math.round(end * 1000));
+  }
+
+  #addAdRange(startMs, endMs) {
+    const list = [...this.adRanges, { startMs, endMs }].sort((a, b) => a.startMs - b.startMs);
+    const merged = [];
+    for (const r of list) {
+      const last = merged.at(-1);
+      if (last && r.startMs <= last.endMs + 250) last.endMs = Math.max(last.endMs, r.endMs);
+      else merged.push({ ...r });
+    }
+    this.adRanges = merged;
+    console.info('[werbung] eingefügte Werbung erkannt', merged.map((r) => `${Math.round(r.startMs / 1000)}–${Math.round(r.endMs / 1000)} s`).join(', '));
+  }
+
+  // ---------------------------------------------------------------- Untertitel
+
+  /**
+   * Untertitel zeigen ([track] aus stream.captions: { key, lang, label, auto, url }) oder ausblenden (null).
+   * Die Datei holt der Hauptprozess (notfalls über einen anderen Client) und gibt sie als WebVTT zurück.
+   * Angezeigt wird sie als eigene <track>-Spur am Video: Shakas Text-System (5.x) leert die Liste einer
+   * nachträglich hinzugefügten Spur, sobald deren Platzhalter geladen ist – dann bliebe sie leer.
+   */
+  async setCaption(track) {
+    const seq = this.loadSeq;
+    if (!track) {
+      this.caption = null;
+      this.#showCaption(null);
+      return true;
+    }
+    let el = this.captions.get(track.key);
+    if (!el) {
+      const vtt = await window.gx.captionText(this.videoId, { url: track.url, lang: track.lang, auto: Boolean(track.auto) });
+      if (seq !== this.loadSeq) return false;
+      el = document.createElement('track');
+      el.kind = 'subtitles';
+      el.label = track.label;
+      el.srclang = track.lang;
+      el.src = URL.createObjectURL(new Blob([vtt], { type: 'text/vtt' }));
+      this.video.appendChild(el);
+      this.captions.set(track.key, el);
+    }
+    this.#showCaption(el);
+    this.caption = track.key;
+    return true;
+  }
+
+  #showCaption(active) {
+    for (const el of this.captions.values()) el.track.mode = el === active ? 'showing' : 'disabled';
   }
 
   // ---------------------------------------------------------------- Bedienung

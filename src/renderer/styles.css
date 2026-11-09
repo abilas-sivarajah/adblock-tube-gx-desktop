@@ -581,3 +581,100 @@ body.tw-side-collapsed .tw-side-row { justify-content: center; padding: 5px 0; }
 .tw-side-head.fav { display: flex; align-items: center; gap: 6px; color: var(--fav); }
 .tw-side-head.fav svg.i { width: 15px; height: 15px; fill: var(--fav); flex: none; }
 body.tw-side-collapsed .tw-side-head.fav { justify-content: center; }
+
+/* ------------------------------------------------------------------ YouTube: Suche, Playlists, Info-Leiste */
+
+.search-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 20px; }
+.search-filters .search-type { margin: 0 8px 0 0; }
+.search-select { padding: 6px 10px; border-radius: 8px; background: var(--chip); border: 1px solid transparent; font-size: 13px; color: var(--text); cursor: pointer; }
+.search-select.active { border-color: var(--text-2); }
+
+.card.playlist .thumb::after { content: ''; position: absolute; left: 6%; right: 6%; top: -6px; height: 6px; border-radius: 6px 6px 0 0; background: #444; }
+.card.playlist .thumb { overflow: visible; margin-top: 6px; }
+.card.playlist .thumb img { border-radius: var(--radius); }
+.playlist-badge { display: flex; align-items: center; gap: 4px; }
+.playlist-badge svg.i { width: 16px; height: 16px; }
+.playlist-head { position: relative; margin: -16px -24px 28px; }
+.playlist-head .channel-info { padding: 64px 24px 0; align-items: flex-start; }
+.playlist-art img { width: 320px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: var(--radius); background: #222; }
+.playlist-actions { display: flex; gap: 10px; margin-top: 16px; }
+.playlist-actions .pill { display: inline-flex; align-items: center; gap: 6px; }
+.playlist-actions svg.i { width: 20px; height: 20px; }
+
+/* Zeitleiste: Kapitel, Highlight, stumm geschaltete Abschnitte, Vorschaubild */
+.seek-chapters div { position: absolute; top: -1px; bottom: -1px; width: 3px; margin-left: -1px; background: rgba(0, 0, 0, .9); }
+.seek-segments div.mute { background: #ffd400; }
+.seek-highlight { position: absolute; top: 3px; width: 11px; height: 11px; margin-left: -5px; padding: 0; transform: rotate(45deg); background: #ff70ff; border: 2px solid #000; border-radius: 2px; z-index: 1; }
+.seek-highlight:hover { transform: rotate(45deg) scale(1.3); }
+.seek-tooltip { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 4px 6px; pointer-events: none; }
+.seek-preview { border: 2px solid #fff; border-radius: 6px; background-color: #000; background-repeat: no-repeat; }
+.seek-chapter { max-width: 240px; overflow: hidden; text-overflow: ellipsis; font-size: 12px; font-weight: 600; }
+.chapter-label { max-width: 30vw; overflow: hidden; padding: 4px 6px; border-radius: 6px; color: #ddd; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.chapter-label:hover { background: rgba(255, 255, 255, .1); color: #fff; }
+#btnCaptions.active::after { content: ''; position: absolute; left: 10px; right: 10px; bottom: 7px; height: 3px; border-radius: 2px; background: var(--red); }
+video::cue { background: rgba(8, 8, 8, .75); color: #fff; }
+/* Untertitel weichen der Bedienleiste aus, solange sie zu sehen ist */
+video::-webkit-media-text-track-container { transition: transform .2s; }
+.stage:has(.controls.show) video::-webkit-media-text-track-container { transform: translateY(-72px); }
+/* YouTube-Chips (Suche, Entdecken) aktiv in Weiß – nicht im Twitch-Lila */
+.search-filters .tw-chip.active, #exploreChips .tw-chip.active { background: var(--text); color: #0f0f0f; }
+
+/* Info-Leiste neben dem Video */
+.info-panel { width: 420px; flex: none; display: flex; flex-direction: column; overflow: hidden; background: #0f0f0f; border-left: 1px solid #222; }
+.watch.mini .info-panel { display: none !important; }
+.info-body { flex: 1; overflow-y: auto; padding: 12px 16px 32px; }
+.info-title { margin: 4px 0 6px; font-size: 18px; line-height: 1.3; user-select: text; }
+.info-original { margin: 0 0 8px; color: var(--text-2); font-size: 12px; user-select: text; }
+.info-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
+.info-chips .chip svg { fill: currentColor; }
+.chip.warn { background: #4a3b00; color: #ffd84d; }
+.chip.action { cursor: pointer; }
+.chip.action:hover { background: #3a3a3a; }
+.info-channel { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid #222; border-bottom: 1px solid #222; }
+.info-avatar { width: 40px; height: 40px; flex: none; border-radius: 50%; object-fit: cover; background: #222; }
+.info-channel-text { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.info-channel-text span { color: var(--text-2); font-size: 12px; }
+.info-section { margin-top: 18px; }
+.info-section h4, .comments-head h4 { margin: 0 0 8px; font-size: 15px; }
+.chapter-list { list-style: none; margin: 0; padding: 0; }
+.chapter { display: flex; align-items: center; gap: 10px; padding: 6px; border-radius: 8px; cursor: pointer; }
+.chapter:hover { background: #1f1f1f; }
+.chapter.current { background: #262626; }
+.chapter img { width: 88px; flex: none; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 6px; background: #222; }
+.chapter-text { display: flex; flex-direction: column; min-width: 0; }
+.chapter-title { font-size: 13px; font-weight: 500; }
+.chapter-time { color: var(--link); font-size: 12px; }
+.info-desc { color: #ddd; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; user-select: text; }
+.info-desc.collapsed { max-height: 7.5em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 55%, transparent); }
+.link-btn { margin-top: 6px; color: var(--text-2); font-size: 13px; font-weight: 600; }
+.link-btn:hover { color: var(--text); }
+.rich-link, .rich-time { color: var(--link); text-decoration: none; cursor: pointer; }
+.rich-link:hover, .rich-time:hover { text-decoration: underline; }
+.info-note { color: var(--text-2); font-size: 13px; }
+.info-comments { margin-top: 22px; padding-top: 14px; border-top: 1px solid #222; }
+.comments-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.comments-head .pill { display: inline-flex; align-items: center; gap: 6px; }
+.comments-head svg.i { width: 18px; height: 18px; }
+.comment { display: flex; gap: 10px; padding: 8px 0; }
+.comment.reply { padding: 6px 0; }
+.comment-avatar { width: 32px; height: 32px; flex: none; border-radius: 50%; object-fit: cover; background: #222; }
+.comment.reply .comment-avatar { width: 24px; height: 24px; }
+.comment-body { flex: 1; min-width: 0; }
+.comment-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-2); font-size: 12px; }
+.comment-head b { color: var(--text); font-size: 13px; }
+.comment-head b.owner { padding: 0 6px; border-radius: 10px; background: #3a3a3a; }
+.comment-flag { display: inline-flex; align-items: center; gap: 2px; }
+.comment-flag svg.i { width: 14px; height: 14px; fill: currentColor; }
+.comment-text { margin-top: 2px; font-size: 13px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; user-select: text; }
+.comment-meta { display: flex; align-items: center; gap: 12px; margin-top: 4px; color: var(--text-2); font-size: 12px; }
+.comment-meta .lite { display: inline-flex; align-items: center; gap: 4px; }
+.comment-meta svg.i { width: 14px; height: 14px; fill: currentColor; }
+.comment-heart { color: #ff4e6a; }
+.comment-replies { margin-left: 4px; }
+.comments-more { margin: 8px 0; }
+
+/* Hinweise mit Aktion ("Rückgängig") */
+.toast { display: flex; align-items: center; gap: 18px; }
+.toast-action { padding: 2px 6px; border-radius: 4px; color: #065fd4; font-weight: 700; pointer-events: auto; }
+.toast-action:hover { background: rgba(6, 95, 212, .1); }
+.set-note { margin: 4px 0 8px; color: var(--text-2); font-size: 12px; }

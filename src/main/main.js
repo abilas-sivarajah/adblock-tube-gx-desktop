@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as YT from './youtube.js';
 import * as SponsorBlock from './sponsorblock.js';
+import * as Community from './community.js';
 import * as PoToken from './potoken.js';
 import * as Account from './account.js';
 import * as TW from './twitch.js';
@@ -48,7 +49,9 @@ let powerPending = false;
 // Zuletzt vom Player gemeldeter Zustand
 let playback = idleState();
 let loadToken = 0;
-let current = null; // { token, video, stream?, segments, error?, startMs }
+let current = null; // { token, video, stream?, segments, sponsor, error?, startMs }
+// Bricht die Stream-Suche des vorigen Videos ab, sobald ein anderes gewählt wird
+let streamAbort = null;
 
 function idleState() {
   return { status: 'idle', positionMs: 0, durationMs: 0, bufferedMs: 0, volume: 100, muted: false, speed: 1 };
@@ -312,12 +315,16 @@ async function loadVideo({ video, startMs, exclude = [], fallback = false, notes
   const previous = fallback && current?.video.id === video.id ? current : null;
   if (!previous) saveProgress();
   const token = ++loadToken;
+  streamAbort?.abort();
+  streamAbort = new AbortController();
+  const signal = streamAbort.signal;
   const resume = startMs ?? store.resumePosition(video.id);
   current = {
     token,
     video,
     startMs: resume,
     segments: previous?.segments ?? [],
+    sponsor: previous?.sponsor ?? null,
     details: previous?.details ?? null,
     error: null,
     stream: null,
@@ -341,7 +348,7 @@ async function loadVideo({ video, startMs, exclude = [], fallback = false, notes
   if (previous) {
     // Gleiches Video mit anderem Client: Bekanntes gleich wieder anzeigen
     if (current.details) send('player:details', { token, details: current.details });
-    if (current.segments.length) send('player:segments', { token, segments: current.segments });
+    if (current.segments.length || current.sponsor) send('player:segments', { token, segments: current.segments, ...(current.sponsor ?? {}) });
   } else {
     // Details (Titel, ähnliche Videos) und SponsorBlock parallel zum Stream
     YT.details(video.id)
@@ -357,16 +364,17 @@ async function loadVideo({ video, startMs, exclude = [], fallback = false, notes
       .catch(() => {});
   }
   if (!previous && store.settings.sponsorBlock && !video.isLive) {
-    SponsorBlock.segments(video.id, store.settings.sponsorCategories, (u, i) => net.fetch(u, i)).then((segments) => {
+    SponsorBlock.segments(video.id, store.settings.sponsorCategories, (u, i) => net.fetch(u, i)).then((sb) => {
       if (token !== loadToken) return;
-      current.segments = segments;
-      send('player:segments', { token, segments });
+      current.segments = sb.segments;
+      current.sponsor = { highlight: sb.highlight, full: sb.full, chapters: sb.chapters };
+      send('player:segments', { token, segments: sb.segments, ...current.sponsor });
       broadcastState();
     });
   }
 
   try {
-    const stream = await YT.stream(video.id, { maxHeight: store.settings.maxQuality, exclude, notes });
+    const stream = await YT.stream(video.id, { maxHeight: store.settings.maxQuality, exclude, notes, signal });
     if (token !== loadToken) return;
     current.stream = stream;
     current.resolvedAt = Date.now();
@@ -375,7 +383,7 @@ async function loadVideo({ video, startMs, exclude = [], fallback = false, notes
     updateCurrentVideo({ ...video, title: stream.title || video.title, channelName: stream.channelName || video.channelName, channelId: stream.channelId || video.channelId || null, durationSec: stream.durationSec > 0 ? stream.durationSec : video.durationSec, isLive: stream.isLive });
     send('player:source', { token, video: current.video, stream, startMs: stream.isLive ? null : resume, maxQuality: store.settings.maxQuality });
   } catch (err) {
-    if (token !== loadToken) return;
+    if (token !== loadToken || err?.name === 'AbortError') return;
     console.warn('Stream-Fehler', err?.reasons ?? err);
     current.error = err?.message ?? 'Video konnte nicht geladen werden';
     playback = { ...playback, status: 'error' };
@@ -682,6 +690,8 @@ function updateCurrentVideo(video) {
 function stopPlayback() {
   saveProgress();
   loadToken++;
+  streamAbort?.abort();
+  streamAbort = null;
   current = null;
   playback = { ...idleState(), volume: playback.volume, muted: playback.muted, speed: playback.speed };
   send('player:stop', {});
@@ -919,9 +929,9 @@ function appInfo() {
 }
 
 function setupIpc() {
-  ipcMain.handle('yt:search', async (_e, q) => {
+  ipcMain.handle('yt:search', async (_e, q, filters) => {
     store.addSearch(q);
-    return YT.search(String(q).slice(0, 200));
+    return YT.search(String(q).slice(0, 200), YT.searchFilters(filters && typeof filters === 'object' ? filters : {}));
   });
   ipcMain.handle('yt:searchMore', (_e, token) => YT.searchMore(String(token)));
   ipcMain.handle('yt:suggestions', (_e, q) => YT.suggestions(String(q).slice(0, 200)).catch(() => []));
@@ -1058,6 +1068,18 @@ function setupIpc() {
   ipcMain.handle('window:isFullscreen', () => Boolean(win?.isFullScreen()));
   ipcMain.on('clients:kick', (_e, id) => server?.kick(Number(id)));
   ipcMain.handle('yt:channel', (_e, id) => YT.channel(String(id)));
+  ipcMain.handle('yt:playlist', (_e, id) => YT.playlist(String(id)));
+  ipcMain.handle('yt:playlistMore', (_e, token) => YT.playlistMore(String(token)));
+  ipcMain.handle('yt:comments', (_e, id, sort) => YT.comments(String(id), sort === 'NEWEST_FIRST' ? 'NEWEST_FIRST' : 'TOP_COMMENTS'));
+  ipcMain.handle('yt:commentsMore', (_e, token) => YT.commentsMore(String(token)));
+  ipcMain.handle('yt:commentReplies', (_e, token) => YT.commentReplies(String(token)));
+  ipcMain.handle('yt:explore', (_e, kind) => YT.explore(String(kind)));
+  ipcMain.handle('yt:captionText', (_e, id, track) =>
+    YT.captionText(String(id), { url: String(track?.url ?? ''), lang: String(track?.lang ?? ''), auto: track?.auto === true }),
+  );
+  // Community-Dienste nur, wenn eingeschaltet (sonst geht keine Anfrage raus)
+  ipcMain.handle('community:branding', (_e, ids) => (store.settings.dearrow ? Community.brandingFor(Array.isArray(ids) ? ids.map(String) : [], (u, i) => net.fetch(u, i)) : {}));
+  ipcMain.handle('community:votes', (_e, id) => (store.settings.returnDislike ? Community.votes(String(id), (u, i) => net.fetch(u, i)) : null));
   ipcMain.handle('yt:channelMore', (_e, token) => YT.channelMore(String(token)));
   ipcMain.handle('subs:list', () => store.subscriptions);
   ipcMain.handle('subs:set', (_e, channel, on) => setSubscribed(channel, on === true));
@@ -1104,6 +1126,13 @@ function setupIpc() {
   ipcMain.handle('update:check', () => checkForUpdates(true));
   ipcMain.handle('update:install', () => installUpdate());
   ipcMain.on('open:external', (_e, url) => {
-    if (typeof url === 'string' && /^https:\/\/(www\.)?(youtube\.com|youtu\.be|github\.com|twitch\.tv)\//.test(url)) shell.openExternal(url);
+    // Auch Links aus Beschreibungen und Kommentaren – aber nur Webseiten (http/https), im Standard-Browser
+    if (typeof url !== 'string' || url.length > 2000) return;
+    try {
+      const u = new URL(url);
+      if (u.protocol === 'https:' || u.protocol === 'http:') shell.openExternal(u.toString());
+    } catch {
+      // keine gültige Adresse
+    }
   });
 }

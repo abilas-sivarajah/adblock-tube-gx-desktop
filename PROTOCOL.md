@@ -119,7 +119,7 @@ PC startet (`state.autostart`).
   "status": "playing",
   "positionMs": 61234, "durationMs": 213040, "bufferedMs": 90000,
   "volume": 80, "muted": false, "speed": 1, "isLive": false, "error": null,
-  "segments": [ { "startMs": 10000, "endMs": 25000, "category": "sponsor", "label": "Sponsor", "uuid": "…" } ],
+  "segments": [ { "startMs": 10000, "endMs": 25000, "category": "sponsor", "label": "Sponsor", "action": "skip", "uuid": "…" } ],
   "queueIndex": 0, "queueLength": 3, "hasNext": true, "hasPrevious": false, "autoplay": true,
   "fullscreen": false, "displayId": 1, "twitchChat": null, "power": true, "autostart": false,
   "displays": [ { "id": 1, "name": "DELL U2415", "primary": true, "width": 1920, "height": 1200 },

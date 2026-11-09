@@ -8,7 +8,7 @@ const on = (channel) => (callback) => {
 };
 
 contextBridge.exposeInMainWorld('gx', {
-  search: (q) => ipcRenderer.invoke('yt:search', q),
+  search: (q, filters) => ipcRenderer.invoke('yt:search', q, filters),
   searchMore: (token) => ipcRenderer.invoke('yt:searchMore', token),
   suggestions: (q) => ipcRenderer.invoke('yt:suggestions', q),
 
@@ -34,6 +34,15 @@ contextBridge.exposeInMainWorld('gx', {
   failed: (info) => ipcRenderer.send('player:failed', info),
   channel: (id) => ipcRenderer.invoke('yt:channel', id),
   channelMore: (token) => ipcRenderer.invoke('yt:channelMore', token),
+  playlist: (id) => ipcRenderer.invoke('yt:playlist', id),
+  playlistMore: (token) => ipcRenderer.invoke('yt:playlistMore', token),
+  comments: (id, sort) => ipcRenderer.invoke('yt:comments', id, sort),
+  commentsMore: (token) => ipcRenderer.invoke('yt:commentsMore', token),
+  commentReplies: (token) => ipcRenderer.invoke('yt:commentReplies', token),
+  explore: (kind) => ipcRenderer.invoke('yt:explore', kind),
+  captionText: (id, track) => ipcRenderer.invoke('yt:captionText', id, track),
+  branding: (ids) => ipcRenderer.invoke('community:branding', ids),
+  votes: (id) => ipcRenderer.invoke('community:votes', id),
   subscriptions: () => ipcRenderer.invoke('subs:list'),
   setSubscribed: (channel, on) => ipcRenderer.invoke('subs:set', channel, on),
   subscriptionFeed: () => ipcRenderer.invoke('subs:feed'),

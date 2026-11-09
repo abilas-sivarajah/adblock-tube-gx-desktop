@@ -95,10 +95,12 @@ Oben links **YouTube | Twitch** umschalten (GX Tube merkt sich die Wahl):
 |---|---|
 | **Vom Handy steuern** | Abspielen, Pause, Springen, Weiter/Zurück, Lautstärke (auch mit den Lautstärketasten des Handys), Geschwindigkeit, Warteschlange („Als Nächstes“, „Zur Warteschlange hinzufügen“), **Vollbild** und **Bildschirm wählen** (bei mehreren Monitoren), mehrere Handys gleichzeitig |
 | **Automatisch finden** | Der PC meldet sich im WLAN; kein Code, kein Konto nötig |
-| **Keine Werbung** | Keine Videowerbung, keine Banner |
-| **SponsorBlock** | Gesponserte Abschnitte werden übersprungen (grün auf dem Fortschrittsbalken), Kategorien einstellbar |
-| **Auch ohne Handy** | Suche mit Vorschlägen, „Weiter ansehen“, Empfehlungen aus deinem Verlauf, Mini-Player beim Stöbern |
-| **Player** | Bis 4K, Qualität und Geschwindigkeit wählbar, Live-Streams, Autoplay, Vollbild, Medientasten der Tastatur. Immer der **Originalton** – Synchronfassungen und KI-Übersetzungen von YouTube werden aussortiert |
+| **Keine Werbung** | Keine Videowerbung, keine Banner. Schneidet YouTube Werbung serverseitig in einen SABR-Stream, erkennt der Player sie an den Metadaten der Videostücke und springt darüber |
+| **SponsorBlock** | Gesponserte Abschnitte werden übersprungen (grün auf dem Fortschrittsbalken) – mit **„Rückgängig“** im Hinweis. Als „stumm“ markierte Abschnitte werden stumm geschaltet (gelb), das **Highlight** steht als ◆ auf der Zeitleiste und in den Infos, Hinweis „ganzes Video ist gesponsert“, Kapitel aus SponsorBlock, wenn YouTube keine hat. Kategorien einstellbar |
+| **Auch ohne Handy** | Suche mit Vorschlägen und **Filtern** (Videos, Kanäle, Playlists, Datum, Länge, Beliebtheit), **Playlists** (Alle abspielen / Zufällig), „Weiter ansehen“, Empfehlungen aus deinem Verlauf, **Entdecken** (Gaming-Trends, Live), Mini-Player beim Stöbern |
+| **Player** | Bis 4K, Qualität und Geschwindigkeit wählbar, Live-Streams, Autoplay, Vollbild, Medientasten der Tastatur. **Kapitel** (Striche auf der Zeitleiste, Name neben der Zeit), **Vorschaubilder** beim Überfahren der Zeitleiste, **Untertitel** (CC, auf Wunsch automatisch in deiner Sprache). Immer der **Originalton** – Synchronfassungen und KI-Übersetzungen von YouTube werden aussortiert |
+| **Infos & Kommentare** | Info-Leiste neben dem Video (`I`): Titel, Aufrufe, Datum, Likes, Kanal mit Abonnieren, Kapitel, Beschreibung mit klickbaren Links und Zeitstempeln, Kommentare (Top oder neueste, mit Antworten) |
+| **Community (optional)** | **DeArrow**: Titel und Vorschaubilder ohne Clickbait. **Return YouTube Dislike**: Dislike-Zahl in den Infos. Beide standardmäßig aus |
 | **Im Hintergrund** | Fenster schließen legt GX Tube in den Infobereich – das Handy findet den PC trotzdem. Optional mit dem Computer starten. |
 | **Updates** | Installierte Windows- und AppImage-Versionen aktualisieren sich selbst |
 | **Google-Konto** | Optional, falls YouTube ohne Anmeldung sperrt (siehe oben) |
@@ -115,7 +117,9 @@ Oben links **YouTube | Twitch** umschalten (GX Tube merkt sich die Wahl):
 | `↑` `↓` | Lautstärke |
 | `M` | Stumm |
 | `F` / Doppelklick | Vollbild |
-| `C` | Twitch-Chat ein/aus |
+| `C` | Twitch-Chat ein/aus (bei YouTube: Untertitel) |
+| `U` | Untertitel ein/aus |
+| `I` | Infos, Kapitel und Kommentare |
 | `Q` | Warteschlange |
 | `Shift+N` / `Shift+P` | Nächstes / vorheriges Video |
 | `0`–`9` | An 0 %–90 % springen |
@@ -167,7 +171,11 @@ BLOCK_CLIENT=IOS npm run debug:play -- dQw4w9WgXcQ 60   # simuliert eine YouTube
 | Google-Konto | Per Code: OAuth-Geräteanmeldung von YouTube auf dem Fernseher (google.com/device), Tokens mit Electron `safeStorage` verschlüsselt, geladen wird über die TV-Clients. Im Fenster: eigenes Chromium-Profil (`persist:gx-google`), Anfragen mit Konto laufen über dieses Profil (erneuerte Cookies bleiben gespeichert), geladen über TV und Mobile Web (PO-Token an die DataSync-ID gebunden) |
 | Player | Shaka Player: Video- und Tonspur getrennt als DASH, Live-Streams als HLS |
 | Fernsteuerung | WebSocket (Port 8765) + UDP-Suche (Port 8766), siehe **[PROTOCOL.md](PROTOCOL.md)** |
-| Werbung im Video | SponsorBlock-API (Abfrage über Hash-Präfix, die Video-ID bleibt privat) |
+| Werbung im Video | SponsorBlock-API (Abfrage über Hash-Präfix, die Video-ID bleibt privat): Überspringen, Stummschalten, Highlight, „ganzes Video“, Kapitel |
+| Player-Skript | Die Entschlüsselung der Stream-Adressen (Code aus YouTubes Player-Skript) läuft in einem abgeschotteten `vm`-Kontext ohne Node-Zugriff, ohne `eval` und mit Zeitlimit |
+| Details | Nur die `/next`-Abfrage (Titel, Beschreibung, Kapitel, ähnliche Videos) – keine zusätzliche Player-Anfrage pro Video. Die Stream-Suche bricht ab, sobald ein anderes Video gewählt wird |
+| Abos | RSS-Feeds der Kanäle; fallen sie aus, höchstens 25 Kanalseiten pro Aktualisierung – mit Google angemeldet stattdessen der Abo-Feed des Kontos (eine Anfrage) |
+| Community | DeArrow (Titel über Hash-Präfix; Vorschaubilder vom DeArrow-Server) und Return YouTube Dislike – nur wenn eingeschaltet |
 | Twitch | GraphQL-Abfragen wie twitch.tv (ohne Konto mit der Kennung der Fernseher-App, dort verlangt Twitch beim Weiterblättern keine Integritätsprüfung), HLS über `usher.ttvnw.net`. Werbeblocker: `third_party/adblock-gx/twitch_worker.js` aus Adblock GX (Techniken nach [TTV-AB](https://github.com/GosuDRM/TTV-AB), MIT) hängt sich im Fenster vor Shaka in `fetch` ein und schreibt die Playlisten um. Chat über IRC-WebSocket. Anmeldung: OAuth-Geräteanmeldung (twitch.tv/activate) |
 
 ```
@@ -182,7 +190,8 @@ src/
 │   ├── account.js           # optionale Google-Anmeldung
 │   ├── twitch.js            # Twitch-Abfragen, Wiedergabe-Adressen, Anmeldung per Code
 │   ├── twitch-account.js    # Twitch-Konto (Token verschlüsselt, Anmeldefenster)
-│   ├── sponsorblock.js
+│   ├── sponsorblock.js      # Überspringen, Stummschalten, Highlight, Kapitel
+│   ├── community.js         # DeArrow, Return YouTube Dislike (optional)
 │   ├── store.js             # Einstellungen, Verlauf (JSON im Benutzerordner)
 │   └── updater.js           # automatische Updates (GitHub-Releases)
 ├── preload/preload.cjs      # sichere Brücke zum Fenster
@@ -194,6 +203,7 @@ test-e2e/smoke.mjs           # startet die echte App und steuert sie wie das Han
 test-e2e/account-test.mjs    # Code fürs Handy, Anmeldefenster, Laden mit Konto, Abmelden
 test-e2e/channel-test.mjs    # Kanalseite, Abonnieren, "Neu von deinen Abos"
 test-e2e/twitch-test.mjs     # Twitch: Startseite, Live mit Werbeblocker und Chat, Kanal, VOD, vom Handy, Anmeldung
+test-e2e/youtube-ui-test.mjs # YouTube-Oberfläche (unsichtbar, stumm): Infos, Kapitel, Untertitel, Suche, Playlists, SponsorBlock
 ```
 
 ## 📄 Lizenz

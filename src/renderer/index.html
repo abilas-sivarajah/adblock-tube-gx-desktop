@@ -59,11 +59,22 @@
         <div class="shelf-head"><h2>Empfohlen</h2><span class="hint">Ähnlich zu dem, was du geschaut hast</span></div>
         <div class="grid" id="recoGrid"></div>
       </div>
+      <div id="shelfExplore" class="shelf" hidden>
+        <div class="shelf-head"><h2>Entdecken</h2><div class="tw-chips" id="exploreChips"></div></div>
+        <div class="grid" id="exploreGrid"></div>
+      </div>
     </section>
 
     <section id="view-search" class="view">
+      <div id="searchFilters" class="search-filters"></div>
       <div class="grid" id="searchGrid"></div>
       <div id="searchStatus" class="status"></div>
+    </section>
+
+    <section id="view-playlist" class="view">
+      <div id="playlistHead" class="playlist-head"></div>
+      <div class="grid" id="playlistGrid"></div>
+      <div id="playlistStatus" class="status"></div>
     </section>
 
     <section id="view-channel" class="view">
@@ -184,9 +195,15 @@
               <div id="seekBuffered" class="seek-buffered"></div>
               <div id="seekSegments" class="seek-segments"></div>
               <div id="seekPlayed" class="seek-played"></div>
+              <div id="seekChapters" class="seek-chapters"></div>
             </div>
+            <button id="seekHighlight" class="seek-highlight" title="Zum Highlight springen (SponsorBlock)" hidden></button>
             <div id="seekThumb" class="seek-thumb"></div>
-            <div id="seekTooltip" class="seek-tooltip" hidden></div>
+            <div id="seekTooltip" class="seek-tooltip" hidden>
+              <div id="seekPreview" class="seek-preview" hidden></div>
+              <div id="seekChapter" class="seek-chapter" hidden></div>
+              <div id="seekTime"></div>
+            </div>
           </div>
           <div class="ctl-bar">
             <button id="btnPrev" class="icon-btn" title="Zurück (Shift+P)" data-icon="prev"></button>
@@ -197,13 +214,16 @@
               <input id="volumeSlider" type="range" min="0" max="100" step="1" value="100" aria-label="Lautstärke">
             </div>
             <div id="timeLabel" class="time"></div>
+            <button id="chapterLabel" class="chapter-label" title="Kapitel" hidden></button>
             <div class="spacer"></div>
             <label class="autoplay-switch" title="Autoplay: nach dem Video ein ähnliches abspielen">
               <input id="autoplayToggle" type="checkbox"><span class="track"><span class="knob"></span></span>
             </label>
+            <button id="btnCaptions" class="icon-btn text" title="Untertitel (u)" hidden>CC</button>
             <button id="btnSpeed" class="icon-btn text" title="Geschwindigkeit">1×</button>
             <button id="btnQuality" class="icon-btn text" title="Qualität">HD</button>
             <button id="btnChat" class="icon-btn" title="Chat (c)" data-icon="chat" hidden></button>
+            <button id="btnInfo" class="icon-btn" title="Infos, Kapitel und Kommentare (i)" data-icon="info"></button>
             <button id="btnQueue" class="icon-btn" title="Warteschlange (q)" data-icon="queue"></button>
             <button id="btnFull" class="icon-btn" title="Vollbild (f)" data-icon="fullscreen"></button>
           </div>
@@ -253,6 +273,16 @@
         <h3>Ähnliche Videos</h3>
         <div id="relatedList"></div>
       </div>
+    </aside>
+    <aside id="infoPanel" class="info-panel" hidden>
+      <div class="queue-head">
+        <div>
+          <h2>Infos</h2>
+          <p id="infoSub"></p>
+        </div>
+        <button id="btnInfoClose" class="icon-btn" data-icon="close" title="Schließen (i)"></button>
+      </div>
+      <div id="infoBody" class="info-body"></div>
     </aside>
   </div>
 

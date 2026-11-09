@@ -23,6 +23,7 @@
     "test:account": "node test-e2e/account-test.mjs",
     "test:channel": "node test-e2e/channel-test.mjs",
     "test:twitch": "node test-e2e/twitch-test.mjs",
+    "test:youtube-ui": "node test-e2e/youtube-ui-test.mjs",
     "dist": "electron-builder --publish never",
     "dist:win": "electron-builder --win --publish never",
     "dist:linux": "electron-builder --linux --publish never",

@@ -1,19 +1,33 @@
 // Alle YouTube-Abfragen über YouTube.js (InnerTube) – ohne Werbedaten.
 // Läuft im Hauptprozess; der Player im Fenster bekommt nur fertige Manifeste.
 
-import { Innertube, Platform, UniversalCache, Log, YTNodes, Constants } from 'youtubei.js';
+import vm from 'node:vm';
+import { Innertube, Platform, UniversalCache, Log, YT, YTNodes, Constants } from 'youtubei.js';
 import { buildSabrFormat } from 'googlevideo/utils';
 
 Log.setLevel(Log.Level.NONE);
 
-// YouTube verschlüsselt die Stream-Adressen mit Funktionen aus seinem Player-Skript.
-// YouTube.js schneidet sie heraus, ausführen müssen wir sie selbst.
-Platform.shim.eval = async (data, env) => {
-  const props = [];
-  if (env.n) props.push(`n: exportedVars.nFunction(${JSON.stringify(env.n)})`);
-  if (env.sig) props.push(`sig: exportedVars.sigFunction(${JSON.stringify(env.sig)})`);
-  return new Function(`${data.output}\nreturn { ${props.join(', ')} }`)();
-};
+// YouTube verschlüsselt die Stream-Adressen mit Funktionen aus seinem Player-Skript. YouTube.js schneidet
+// sie heraus und hängt selbst "return process(n, sp, sig)" an – ausführen müssen wir den Code.
+// Das passiert abgeschottet: eigener Kontext ohne Node (kein process, kein require), ohne eval/new Function
+// darin und mit Zeitlimit – ein kaputtes oder bösartiges Skript kann den Hauptprozess (und damit auch den
+// Empfänger fürs Handy) weder übernehmen noch einfrieren.
+const PLAYER_SCRIPT_TIMEOUT_MS = 3000;
+
+export function evalPlayerScript(code) {
+  const context = vm.createContext(Object.create(null), { codeGeneration: { strings: false, wasm: false } });
+  const result = vm.runInContext(`(function () {\n${code}\n})()`, context, { timeout: PLAYER_SCRIPT_TIMEOUT_MS, filename: 'youtube-player.js' });
+  if (!result || typeof result !== 'object') return result;
+  // Nur einfache Werte zurück in die Hauptwelt (keine Objekte aus dem fremden Kontext)
+  const out = {};
+  for (const key of Object.keys(result)) {
+    const value = result[key];
+    if (value === undefined || value === null || ['string', 'number', 'boolean'].includes(typeof value)) out[key] = value;
+  }
+  return out;
+}
+
+Platform.shim.eval = async (data) => evalPlayerScript(data.output);
 
 /**
  * Reihenfolge der YouTube-Clients für die Streams. Nicht jeder liefert jedes Video,
@@ -110,6 +124,8 @@ export function tvFetch(base) {
 
 export const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
 export const CHANNEL_ID = /^UC[A-Za-z0-9_-]{22}$/;
+// Playlists (PL…, OLAK…, UU… usw.) – Mixe (RD…) sind keine echten Playlists und lassen sich nicht abrufen
+export const PLAYLIST_ID = /^(?!RD)[A-Za-z0-9_-]{12,64}$/;
 const channelIdOf = (value) => (CHANNEL_ID.test(value ?? '') ? value : null);
 // Zeilen wie "109.546 Aufrufe" oder "vor 3 Monaten" sind kein Kanalname
 const VIEWS_TEXT = /aufrufe|views|zuschauer|watching/i;
@@ -345,6 +361,40 @@ export function toVideo(node) {
   };
 }
 
+/** Eine Playlist aus Suchergebnissen (LockupView mit PLAYLIST oder die ältere Playlist-Kachel). Mixe nicht. */
+export function toPlaylist(node) {
+  if (!node) return null;
+  if (node.type === 'LockupView') {
+    if (node.content_type !== 'PLAYLIST' || !PLAYLIST_ID.test(node.content_id || '')) return null;
+    const rows = node.metadata?.metadata?.metadata_rows ?? [];
+    const firstRow = (rows[0]?.metadata_parts ?? []).map((p) => text(p.text)).filter(Boolean);
+    const image = node.content_image?.primary_thumbnail ?? node.content_image;
+    const badges = (image?.overlays ?? []).flatMap((o) => o.badges ?? []).map((b) => text(b.text)).filter(Boolean);
+    return {
+      kind: 'playlist',
+      id: node.content_id,
+      title: text(node.metadata?.title),
+      channelName: firstRow.find((p) => !/^(playlist|mix|podcast)$/i.test(p)) || '',
+      channelId: channelIdOf(node.metadata?.image?.renderer_context?.command_context?.on_tap?.payload?.browseId),
+      thumbnail: bestThumb(image?.image),
+      countText: badges.find((b) => /\d/.test(b)) || '',
+    };
+  }
+  if (node.type === 'Playlist' || node.type === 'GridPlaylist') {
+    if (!PLAYLIST_ID.test(node.id || '')) return null;
+    return {
+      kind: 'playlist',
+      id: node.id,
+      title: text(node.title),
+      channelName: node.author?.name && node.author.name !== 'N/A' ? node.author.name : '',
+      channelId: channelIdOf(node.author?.id),
+      thumbnail: bestThumb(Array.isArray(node.thumbnails?.[0]) ? node.thumbnails[0] : node.thumbnails),
+      countText: text(node.video_count ?? node.video_count_short),
+    };
+  }
+  return null;
+}
+
 function toChannel(node) {
   if (node?.type !== 'Channel') return null;
   return {
@@ -368,6 +418,11 @@ function flattenResults(nodes) {
     if (n.type === 'Channel') {
       const c = toChannel(n);
       if (c) out.push(c);
+      continue;
+    }
+    const pl = toPlaylist(n);
+    if (pl) {
+      out.push(pl);
       continue;
     }
     const v = toVideo(n);
@@ -405,10 +460,28 @@ async function guarded(fn) {
 
 // ------------------------------------------------------------------ Suche
 
-export async function search(query) {
+// Erlaubte Suchfilter (der erste Wert ist jeweils "egal")
+const SEARCH_FILTERS = {
+  type: ['all', 'video', 'channel', 'playlist'],
+  upload_date: ['all', 'today', 'week', 'month', 'year'],
+  duration: ['all', 'under_three_mins', 'three_to_twenty_mins', 'over_twenty_mins'],
+  prioritize: ['relevance', 'popularity'],
+};
+
+/** Suchfilter prüfen: Unbekanntes wird zu "egal". */
+export function searchFilters(raw = {}) {
+  const out = {};
+  for (const [key, allowed] of Object.entries(SEARCH_FILTERS)) out[key] = allowed.includes(raw?.[key]) ? raw[key] : allowed[0];
+  return out;
+}
+
+export async function search(query, filters = {}) {
   return guarded(async () => {
     const yt = await client();
-    const res = await yt.search(query, { type: 'all' });
+    const f = searchFilters(filters);
+    const opts = { type: f.type };
+    for (const key of ['upload_date', 'duration', 'prioritize']) if (f[key] !== SEARCH_FILTERS[key][0]) opts[key] = f[key];
+    const res = await yt.search(query, opts);
     return storeSearch(res);
   });
 }
@@ -447,30 +520,245 @@ export async function suggestions(query) {
 
 // ------------------------------------------------------------------ Video
 
-/** Titel, Kanal, Beschreibung und ähnliche Videos (für Autoplay und die Seitenleiste). */
+/**
+ * Nur die Seite "Als Nächstes" (/next): Titel, Kanal, Beschreibung, Kapitel, ähnliche Videos.
+ * getInfo() schickte zusätzlich eine Player-Anfrage mit dem Web-Client ohne PO-Token – eine
+ * Anfrage mehr pro Video, und genau die Sorte, die YouTube für Bot-Sperren zählt.
+ */
+async function watchNext(yt, id) {
+  const endpoint = new YTNodes.NavigationEndpoint({ watchNextEndpoint: { videoId: id, racyCheckOk: true, contentCheckOk: true } });
+  const next = await endpoint.call(yt.actions);
+  return new YT.VideoInfo([{ data: {} }, next], yt.actions, '');
+}
+
+// Kapitel: vom Kanal in der Beschreibung gesetzt, sonst die automatisch erzeugten
+const CHAPTER_KEYS = ['DESCRIPTION_CHAPTERS', 'AUTO_CHAPTERS'];
+
+/** Kapitel aus der Zeitleiste der /next-Antwort. */
+export function chaptersOf(info) {
+  const markers = info?.player_overlays?.decorated_player_bar?.player_bar?.markers_map ?? [];
+  for (const key of CHAPTER_KEYS) {
+    const chapters = markers.find((m) => m.marker_key === key)?.value?.chapters ?? [];
+    const list = chapters
+      .map((c) => ({ title: text(c.title).trim(), startMs: Math.max(0, Number(c.time_range_start_millis) || 0), thumbnail: bestThumb(c.thumbnail) }))
+      .filter((c) => c.title)
+      .sort((a, b) => a.startMs - b.startMs);
+    if (list.length >= 2) return list;
+  }
+  return [];
+}
+
+const STAMP = '\\(?((?:\\d{1,2}:)?\\d{1,2}:\\d{2})\\)?';
+const STAMP_FIRST = new RegExp(`^\\s*(?:[-–•▶►·*]\\s*)?${STAMP}\\s*(?:[-–—:|·]\\s*)?(.+?)\\s*$`);
+const STAMP_LAST = new RegExp(`^\\s*(?:[-–•▶►·*]\\s*)?(.+?)\\s*(?:[-–—:|·]\\s*)?${STAMP}\\s*$`);
+
+/** Kapitel aus Zeitstempeln in der Beschreibung – nach YouTubes Regeln: ab 0:00, mindestens drei, je 10 s Abstand. */
+export function chaptersFromDescription(description) {
+  const list = [];
+  for (const line of String(description ?? '').split('\n')) {
+    let m = line.match(STAMP_FIRST);
+    let time = m?.[1];
+    let title = m?.[2];
+    if (!m) {
+      m = line.match(STAMP_LAST);
+      time = m?.[2];
+      title = m?.[1];
+    }
+    if (!m) continue;
+    const secs = parseDuration(time);
+    title = String(title ?? '').trim();
+    if (secs < 0 || !title || /^https?:\/\//i.test(title)) continue;
+    list.push({ title, startMs: secs * 1000, thumbnail: null });
+  }
+  if (list.length < 3 || list[0].startMs !== 0) return [];
+  for (let i = 1; i < list.length; i++) if (list[i].startMs - list[i - 1].startMs < 10_000) return [];
+  return list;
+}
+
+/** Details aus der /next-Antwort zusammenstellen. */
+export function detailsFrom(id, info) {
+  const p = info?.primary_info;
+  const s = info?.secondary_info;
+  const owner = s?.owner?.author;
+  const description = text(s?.description);
+  const viewsText = text(p?.view_count?.view_count) || text(p?.view_count?.short_view_count);
+  const chapters = chaptersOf(info);
+  return {
+    id,
+    title: text(p?.title),
+    channelName: owner?.name && owner.name !== 'N/A' ? owner.name : '',
+    channelId: channelIdOf(owner?.id),
+    channelAvatar: bestThumb(owner?.thumbnails),
+    subscribersText: text(s?.owner?.subscriber_count),
+    thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+    durationSec: -1,
+    viewsText,
+    dateText: text(p?.published),
+    relativeDate: text(p?.relative_date),
+    likeCount: Number.isFinite(info?.basic_info?.like_count) ? info.basic_info.like_count : null,
+    description,
+    chapters: chapters.length ? chapters : chaptersFromDescription(description),
+    isLive: Boolean(p?.view_count?.is_live),
+    related: unique((info?.watch_next_feed ?? []).map(toVideo)),
+  };
+}
+
+/** Titel, Kanal, Beschreibung, Kapitel und ähnliche Videos (für die Info-Leiste, Autoplay und die Seitenleiste). */
 export async function details(id) {
   if (!VIDEO_ID.test(id)) throw new Error('Ungültige Video-ID');
   // Während anonym gesperrt ist, auch die Details mit Konto holen
   const viaAccount = options.account?.loggedIn() && Date.now() < accountFirstUntil ? await accountClient().then((a) => a.yt, () => null) : null;
-  let info = viaAccount ? await viaAccount.getInfo(id).catch(() => null) : null;
-  if (!info) {
+  let info = viaAccount ? await watchNext(viaAccount, id).catch(() => null) : null;
+  if (!info?.primary_info) {
     const yt = await client().catch((e) => Promise.reject(friendlyError(e)));
-    info = await guarded(() => yt.getInfo(id));
+    info = await guarded(() => watchNext(yt, id));
   }
-  const b = info.basic_info;
-  const related = unique((info.watch_next_feed ?? []).map(toVideo));
+  return detailsFrom(id, info);
+}
+
+// ------------------------------------------------------------------ Kommentare
+
+const commentPages = new Map(); // Token → Comments (für "Mehr laden")
+const replyThreads = new Map(); // Token → CommentThread (für die Antworten)
+let commentCounter = 0;
+
+function remember(map, value, prefix) {
+  const key = prefix + ++commentCounter;
+  map.set(key, value);
+  for (const k of map.keys()) if (map.size > 200) map.delete(k);
+  return key;
+}
+
+function toComment(view, thread = null) {
+  if (!view) return null;
+  const author = view.author;
   return {
-    id,
-    title: b.title ?? '',
-    channelName: b.author ?? '',
-    channelId: b.channel_id ?? null,
-    thumbnail: bestThumb(b.thumbnail, id),
-    durationSec: b.duration ?? -1,
-    viewCount: b.view_count ?? -1,
-    description: b.short_description ?? '',
-    isLive: Boolean(b.is_live),
-    related,
+    id: view.comment_id ?? '',
+    author: author?.name ?? '',
+    authorId: channelIdOf(author?.id),
+    avatar: bestThumb(author?.thumbnails),
+    text: text(view.content),
+    published: view.published_time ?? '',
+    likes: view.like_count ?? '',
+    replyCount: view.reply_count ?? '',
+    pinned: Boolean(view.is_pinned),
+    hearted: Boolean(view.is_hearted),
+    byOwner: Boolean(view.author_is_channel_owner),
+    replies: thread?.has_replies && thread.comment_replies_data ? remember(replyThreads, thread, 'r') : null,
   };
+}
+
+function commentPage(c) {
+  return {
+    count: text(c.header?.comments_count),
+    items: (c.contents ?? []).map((t) => toComment(t.comment, t)).filter(Boolean),
+    next: c.has_continuation ? remember(commentPages, c, 'c') : null,
+  };
+}
+
+/** Kommentare eines Videos (beste oder neueste zuerst). */
+export async function comments(id, sort = 'TOP_COMMENTS') {
+  if (!VIDEO_ID.test(id)) throw new Error('Ungültige Video-ID');
+  return guarded(async () => {
+    const yt = await client();
+    const c = await yt.getComments(id, sort === 'NEWEST_FIRST' ? 'NEWEST_FIRST' : 'TOP_COMMENTS');
+    return commentPage(c);
+  });
+}
+
+export async function commentsMore(token) {
+  const prev = commentPages.get(token);
+  if (!prev) return { count: '', items: [], next: null };
+  commentPages.delete(token);
+  return guarded(async () => commentPage(await prev.getContinuation()));
+}
+
+/** Antworten auf einen Kommentar (erste Seite bzw. weitere über [token] aus der letzten Antwort). */
+export async function commentReplies(token) {
+  const entry = replyThreads.get(token);
+  if (!entry) return { items: [], next: null };
+  replyThreads.delete(token);
+  return guarded(async () => {
+    if (entry.more) {
+      const cont = await entry.thread.getContinuation();
+      const list = cont?.contents ?? cont?.replies ?? [];
+      return { items: list.map((t) => toComment(t.comment ?? t)).filter(Boolean), next: null };
+    }
+    const thread = await entry.getReplies();
+    const items = (thread.replies ?? []).map((t) => toComment(t.comment ?? t)).filter(Boolean);
+    return { items, next: thread.has_continuation ? remember(replyThreads, { more: true, thread }, 'r') : null };
+  });
+}
+
+// ------------------------------------------------------------------ Playlists
+
+const playlistPages = new Map();
+let playlistCounter = 0;
+
+function storePlaylistVideos(pl, info) {
+  let next = null;
+  if (pl.has_continuation) {
+    next = 'p' + ++playlistCounter;
+    playlistPages.set(next, { pl, info });
+    for (const key of playlistPages.keys()) if (playlistPages.size > 20) playlistPages.delete(key);
+  }
+  const items = unique((pl.items ?? pl.videos ?? []).map(toVideo)).map((v) => ({ ...v, kind: 'video' }));
+  return { items, next };
+}
+
+/** Kopf und Videos einer Playlist. */
+export async function playlist(id) {
+  if (!PLAYLIST_ID.test(id)) throw new Error('Ungültige Playlist');
+  return guarded(async () => {
+    const yt = await client();
+    const pl = await yt.getPlaylist(id);
+    const i = pl.info ?? {};
+    const info = {
+      id,
+      title: text(i.title) || 'Playlist',
+      channelName: i.author?.name && i.author.name !== 'N/A' ? i.author.name : '',
+      channelId: channelIdOf(i.author?.id),
+      countText: text(i.total_items),
+      viewsText: text(i.views),
+      updatedText: text(i.last_updated),
+      description: text(i.description).slice(0, 600),
+      thumbnail: bestThumb(i.thumbnails),
+    };
+    return { ...info, ...storePlaylistVideos(pl, info) };
+  });
+}
+
+export async function playlistMore(token) {
+  const prev = playlistPages.get(token);
+  if (!prev) return { items: [], next: null };
+  playlistPages.delete(token);
+  return guarded(async () => storePlaylistVideos(await prev.pl.getContinuation(), prev.info));
+}
+
+// ------------------------------------------------------------------ Entdecken (Startseite)
+
+// Wie die "Trends" der Android-App (NewPipe): Gaming-Trends und Live-Streams über die YouTube-Themenkanäle
+const EXPLORE = {
+  gaming: { browseId: 'UCOpNcN46UbXVtpKMrmU4Abg', params: 'Egh0cmVuZGluZw==' },
+  live: { browseId: 'UC4R8DWoMoI7CAwX8_LjQHig', params: 'EgdsaXZldGFikgEDCKEK' },
+};
+const exploreCache = new Map(); // Art → { at, videos }
+const EXPLORE_TTL_MS = 30 * 60 * 1000;
+
+export async function explore(kind) {
+  const target = EXPLORE[kind];
+  if (!target) throw new Error('Unbekannte Rubrik');
+  const cached = exploreCache.get(kind);
+  if (cached && Date.now() - cached.at < EXPLORE_TTL_MS) return cached.videos;
+  return guarded(async () => {
+    const yt = await client();
+    const res = await yt.actions.execute('/browse', { ...target, parse: true });
+    const memo = res.contents_memo;
+    const nodes = memo ? ['LockupView', 'Video', 'GridVideo', 'CompactVideo'].flatMap((t) => memo.get(t) ?? []) : [];
+    const videos = unique(nodes.map(toVideo)).filter((v) => !v.isShort).slice(0, 40);
+    exploreCache.set(kind, { at: Date.now(), videos });
+    return videos;
+  });
 }
 
 class StreamError extends Error {
@@ -576,6 +864,59 @@ function failed(ctx, reason) {
   ctx.trail.push(reason);
 }
 
+/** Die Suche nach einem Stream wurde abgebrochen (inzwischen läuft ein anderes Video). */
+export class StreamAborted extends Error {
+  constructor() {
+    super('abgebrochen');
+    this.name = 'AbortError';
+  }
+}
+
+function checkAborted(ctx) {
+  if (ctx.signal?.aborted) throw new StreamAborted();
+}
+
+// Das PO-Token für die Video-Server hängt am gemeinsamen Player-Objekt von YouTube.js (player.po_token).
+// Zwei Suchen gleichzeitig (schnell weitergeklickt) würden es sich gegenseitig überschreiben – dann hätten
+// Adressen das Token des falschen Videos oder gar keins (später HTTP 403). Deshalb nacheinander.
+let playerLock = Promise.resolve();
+function withPlayerLock(fn) {
+  const run = playerLock.then(fn, fn);
+  playerLock = run.catch(() => {});
+  return run;
+}
+
+/** Untertitel eines Videos: Sprache, Name, automatisch erzeugt?, Adresse (immer absolut). */
+export function captionTracks(info) {
+  return (info?.captions?.caption_tracks ?? [])
+    .filter((t) => t?.base_url && t.language_code)
+    .map((t) => ({
+      lang: t.language_code,
+      label: text(t.name) || t.language_code,
+      auto: t.kind === 'asr',
+      translatable: Boolean(t.is_translatable),
+      url: t.base_url.startsWith('/') ? 'https://www.youtube.com' + t.base_url : t.base_url,
+    }))
+    .slice(0, 60);
+}
+
+/** Vorschaubilder für die Zeitleiste: das größte Raster bis 320 px Breite. */
+export function storyboardOf(info) {
+  const sb = info?.storyboards;
+  const boards = (sb?.boards ?? []).filter((b) => b?.template_url && b.thumbnail_width > 0 && b.columns > 0 && b.rows > 0 && b.thumbnail_count > 0);
+  if (!boards.length) return null;
+  const best = boards.filter((b) => b.thumbnail_width <= 320).sort((a, b) => b.thumbnail_width - a.thumbnail_width)[0] ?? boards[0];
+  return {
+    template: best.template_url,
+    width: best.thumbnail_width,
+    height: best.thumbnail_height,
+    count: best.thumbnail_count,
+    intervalMs: Number(best.interval) || 0,
+    columns: best.columns,
+    rows: best.rows,
+  };
+}
+
 /** Bestes Ergebnis unter den Notlösungen: höchste Auflösung, bei Gleichstand DASH vor der Datei mit Ton. */
 export function bestCandidate(candidates) {
   return [...candidates].sort((a, b) => (b.maxHeight || 0) - (a.maxHeight || 0) || (a.kind === 'dash' ? -1 : 0) - (b.kind === 'dash' ? -1 : 0))[0] ?? null;
@@ -608,99 +949,15 @@ export function clientsLeft(exclude = []) {
  * Streams in niedrigerer Qualität (YouTube sperrt die höheren) in [ctx.candidates].
  */
 async function tryClients(id, group, ctx) {
-  const { yt } = group;
   let botBlocks = 0;
   for (const clientName of withLastGoodFirst(group.clients, group.prefix)) {
+    checkAborted(ctx);
     const label = group.prefix + clientName;
+    let outcome;
     try {
-      const po = await poTokensFor(yt, clientName, id, group.binding);
-      // Token für die Video-Server: hängt der Player an jede Stream-Adresse an (&pot=)
-      yt.session.player.po_token = po?.session;
-      const info = await yt.getBasicInfo(id, { client: clientName, po_token: po?.content });
-      const status = info.playability_status;
-      if (status?.status !== 'OK') {
-        const reason = status?.reason || status?.status || 'nicht abspielbar';
-        failed(ctx, `${label}: ${reason}`);
-        // Privat / gelöscht: andere Clients ändern daran nichts
-        if (status?.status === 'ERROR') return null;
-        // Bot-Sperre gilt fürs ganze Netz – nicht alle Clients durchprobieren (das macht es nur schlimmer)
-        if (BOT_REASON.test(reason) && ++botBlocks >= 2) {
-          ctx.botStop = true;
-          return null;
-        }
-        continue;
-      }
-      const sd = info.streaming_data;
-      const b = info.basic_info;
-      const meta = {
-        id,
-        title: b.title ?? '',
-        channelName: b.author ?? '',
-        channelId: channelIdOf(b.channel_id),
-        thumbnail: bestThumb(b.thumbnail, id),
-        durationSec: b.duration ?? -1,
-        isLive: Boolean(b.is_live),
-        client: label,
-        account: Boolean(group.account),
-      };
-      if (b.is_live || b.is_post_live_dvr) {
-        if (sd?.hls_manifest_url) return { ...meta, kind: 'hls', url: sd.hls_manifest_url };
-        failed(ctx, `${label}: kein Live-Stream`);
-        continue;
-      }
-      const formats = sd?.adaptive_formats ?? [];
-      const videos = formats.filter((f) => f.has_video && !f.has_audio);
-      // Immer der Originalton – Synchronfassungen fliegen raus
-      const dubbed = notOriginalAudio(formats);
-      const audio = formats.filter((f) => f.has_audio && !f.has_video && !dubbed(f)).sort((a, c) => (c.bitrate || 0) - (a.bitrate || 0))[0];
-      // Video mit Ton in einer Datei (meist 360p) – liefert YouTube fast immer
-      const muxed = (sd?.formats ?? []).filter((f) => f.has_video && f.has_audio).sort((a, c) => (c.height || 0) - (a.height || 0))[0];
-      const middle = (f) => (Number(f.content_length) || 0) * 0.5;
-      const works = async (f) => !ctx.check || urlWorks(await f.decipher(yt.session.player), ctx.fetchImpl, middle(f));
-
-      // Beste Auflösung bis maxHeight, die YouTube wirklich ausliefert – manche Clients sperren
-      // höhere Qualitäten (ohne passendes Token), niedrigere gehen dann meist noch.
-      const heights = [...new Set(videos.map((f) => f.height || 0))].filter((h) => h > 0 && h <= ctx.maxHeight).sort((a, c) => c - a);
-      if (!heights.length && videos.length) heights.push(Math.min(...videos.map((f) => f.height || 0)));
-      const audioOk = audio ? await works(audio) : false;
-      const tried = [];
-      let video = null;
-      if (audioOk) {
-        for (const h of heights.slice(0, 5)) {
-          const candidate = videos.filter((f) => f.height === h).sort((a, c) => (c.bitrate || 0) - (a.bitrate || 0))[0];
-          tried.push(`${h}p`);
-          if (await works(candidate)) {
-            video = candidate;
-            break;
-          }
-        }
-      }
-      if (video) {
-        const cap = video.height;
-        const manifest = await info.toDash({
-          // Nur Videospuren bis zur geprüften Auflösung – darüber sperrt YouTube
-          format_filter: (f) => (f.has_video && (f.height || 0) > cap) || dubbed(f),
-        });
-        const result = { ...meta, kind: 'dash', manifest, maxHeight: cap, poToken: Boolean(po), degraded: tried.length > 1, note: tried.length > 1 ? `höhere Qualität gesperrt (${tried.slice(0, -1).join(', ')})` : null };
-        ctx.trail.push(`${label}: ${cap}p${result.degraded ? ` (${tried.slice(0, -1).join(', ')} gesperrt)` : ''}`);
-        if (!result.degraded) {
-          rememberGood(group.prefix, clientName);
-          return result;
-        }
-        // Nur niedrigere Qualität: merken und die anderen Clients fragen
-        ctx.candidates.push(result);
-        continue;
-      }
-      if (muxed && (await works(muxed))) {
-        const result = { ...meta, kind: 'progressive', url: await muxed.decipher(yt.session.player), maxHeight: muxed.height, poToken: Boolean(po), degraded: (muxed.height || 0) < (heights[0] ?? 0), note: 'nur Datei mit Ton (niedrige Qualität)' };
-        ctx.trail.push(`${label}: nur ${muxed.height}p-Datei (${!audioOk ? 'Ton' : 'Video'} gesperrt)`);
-        if (!result.degraded) return result;
-        ctx.candidates.push(result);
-        continue;
-      }
-      const what = !audio ? 'keine Tonspur' : !audioOk ? 'Ton' : `Video ${tried.join(', ') || 'keine Spur'}`;
-      failed(ctx, `${label}: Stream gesperrt (${what}${muxed ? ', auch die 360p-Datei' : ''})`);
+      outcome = await withPlayerLock(() => attemptClient(id, group, ctx, clientName, label));
     } catch (e) {
+      if (e instanceof StreamAborted) throw e;
       // Token in Google widerrufen: nicht weiter mit Konto probieren, Anmeldung als abgelaufen zeigen
       if (group.account && REFRESH_REJECTED.test(String(e?.message))) {
         options.account?.onExpired?.();
@@ -710,11 +967,124 @@ async function tryClients(id, group, ctx) {
         return null;
       }
       failed(ctx, `${label}: ${shortError(e)}`);
-    } finally {
-      yt.session.player.po_token = undefined;
+      continue;
+    }
+    if (outcome.result) return outcome.result;
+    // Privat / gelöscht: andere Clients ändern daran nichts
+    if (outcome.stop) return null;
+    // Bot-Sperre gilt fürs ganze Netz – nicht alle Clients durchprobieren (das macht es nur schlimmer)
+    if (outcome.bot && ++botBlocks >= 2) {
+      ctx.botStop = true;
+      return null;
     }
   }
   return null;
+}
+
+/**
+ * Ein Client: Player-Antwort holen und prüfen, ob die Adressen wirklich laufen.
+ * Ergebnis: { result } (volle Qualität), { stop }, { bot } oder {} (weiter mit dem nächsten Client).
+ */
+async function attemptClient(id, group, ctx, clientName, label) {
+  const { yt } = group;
+  checkAborted(ctx);
+  try {
+    const po = await poTokensFor(yt, clientName, id, group.binding);
+    // Token für die Video-Server: hängt der Player an jede Stream-Adresse an (&pot=)
+    yt.session.player.po_token = po?.session;
+    const info = await yt.getBasicInfo(id, { client: clientName, po_token: po?.content });
+    checkAborted(ctx);
+    const status = info.playability_status;
+    if (status?.status !== 'OK') {
+      const reason = status?.reason || status?.status || 'nicht abspielbar';
+      failed(ctx, `${label}: ${reason}`);
+      if (status?.status === 'ERROR') return { stop: true };
+      return { bot: BOT_REASON.test(reason) };
+    }
+    const sd = info.streaming_data;
+    const b = info.basic_info;
+    const meta = {
+      id,
+      title: b.title ?? '',
+      channelName: b.author ?? '',
+      channelId: channelIdOf(b.channel_id),
+      thumbnail: bestThumb(b.thumbnail, id),
+      durationSec: b.duration ?? -1,
+      isLive: Boolean(b.is_live),
+      client: label,
+      account: Boolean(group.account),
+      captions: captionTracks(info),
+      storyboard: b.is_live ? null : storyboardOf(info),
+    };
+    if (b.is_live || b.is_post_live_dvr) {
+      if (sd?.hls_manifest_url) return { result: { ...meta, kind: 'hls', url: sd.hls_manifest_url } };
+      failed(ctx, `${label}: kein Live-Stream`);
+      return {};
+    }
+    const formats = sd?.adaptive_formats ?? [];
+    const videos = formats.filter((f) => f.has_video && !f.has_audio);
+    // Immer der Originalton – Synchronfassungen fliegen raus
+    const dubbed = notOriginalAudio(formats);
+    const audio = formats.filter((f) => f.has_audio && !f.has_video && !dubbed(f)).sort((a, c) => (c.bitrate || 0) - (a.bitrate || 0))[0];
+    // Video mit Ton in einer Datei (meist 360p) – liefert YouTube fast immer
+    const muxed = (sd?.formats ?? []).filter((f) => f.has_video && f.has_audio).sort((a, c) => (c.height || 0) - (a.height || 0))[0];
+    const middle = (f) => (Number(f.content_length) || 0) * 0.5;
+    const works = async (f) => !ctx.check || urlWorks(await f.decipher(yt.session.player), ctx.fetchImpl, middle(f));
+    const bestAt = (h) => videos.filter((f) => f.height === h).sort((a, c) => (c.bitrate || 0) - (a.bitrate || 0))[0];
+
+    // Beste Auflösung bis maxHeight, die YouTube wirklich ausliefert – manche Clients sperren
+    // höhere Qualitäten (ohne passendes Token), niedrigere gehen dann meist noch.
+    const heights = [...new Set(videos.map((f) => f.height || 0))].filter((h) => h > 0 && h <= ctx.maxHeight).sort((a, c) => c - a);
+    if (!heights.length && videos.length) heights.push(Math.min(...videos.map((f) => f.height || 0)));
+    // Ton und beste Videospur gleichzeitig prüfen (spart eine Wartezeit vor dem Start)
+    const [audioOk, firstOk] = await Promise.all([audio ? works(audio) : false, heights.length ? works(bestAt(heights[0])) : false]);
+    checkAborted(ctx);
+    const tried = [];
+    let video = null;
+    if (audioOk && heights.length) {
+      tried.push(`${heights[0]}p`);
+      if (firstOk) video = bestAt(heights[0]);
+      else {
+        for (const h of heights.slice(1, 5)) {
+          const candidate = bestAt(h);
+          tried.push(`${h}p`);
+          if (await works(candidate)) {
+            video = candidate;
+            break;
+          }
+          checkAborted(ctx);
+        }
+      }
+    }
+    if (video) {
+      const cap = video.height;
+      const manifest = await info.toDash({
+        // Nur Videospuren bis zur geprüften Auflösung – darüber sperrt YouTube
+        format_filter: (f) => (f.has_video && (f.height || 0) > cap) || dubbed(f),
+      });
+      const result = { ...meta, kind: 'dash', manifest, maxHeight: cap, poToken: Boolean(po), degraded: tried.length > 1, note: tried.length > 1 ? `höhere Qualität gesperrt (${tried.slice(0, -1).join(', ')})` : null };
+      ctx.trail.push(`${label}: ${cap}p${result.degraded ? ` (${tried.slice(0, -1).join(', ')} gesperrt)` : ''}`);
+      if (!result.degraded) {
+        rememberGood(group.prefix, clientName);
+        return { result };
+      }
+      // Nur niedrigere Qualität: merken und die anderen Clients fragen
+      ctx.candidates.push(result);
+      return {};
+    }
+    if (muxed && (await works(muxed))) {
+      const result = { ...meta, kind: 'progressive', url: await muxed.decipher(yt.session.player), maxHeight: muxed.height, poToken: Boolean(po), degraded: (muxed.height || 0) < (heights[0] ?? 0), note: 'nur Datei mit Ton (niedrige Qualität)' };
+      ctx.trail.push(`${label}: nur ${muxed.height}p-Datei (${!audioOk ? 'Ton' : 'Video'} gesperrt)`);
+      if (!result.degraded) return { result };
+      ctx.candidates.push(result);
+      return {};
+    }
+    const what = !audio ? 'keine Tonspur' : !audioOk ? 'Ton' : `Video ${tried.join(', ') || 'keine Spur'}`;
+    failed(ctx, `${label}: Stream gesperrt (${what}${muxed ? ', auch die 360p-Datei' : ''})`);
+    return {};
+  } finally {
+    yt.session.player.po_token = undefined;
+  }
 }
 
 // ------------------------------------------------------------------ SABR
@@ -770,10 +1140,13 @@ async function sabrData(yt, id, clientName, po) {
 async function trySabr(id, group, ctx, names = SABR_CLIENTS) {
   const { yt } = group;
   for (const clientName of names) {
+    checkAborted(ctx);
     const label = group.prefix + SABR_PREFIX + clientName;
     try {
       const po = await poTokensFor(yt, clientName, id, group.binding);
-      const { info, sd, ustreamerConfig, url } = await sabrData(yt, id, clientName, po);
+      // Unter der Sperre: Entschlüsseln darf kein fremdes PO-Token vom gemeinsamen Player erwischen
+      const { info, sd, ustreamerConfig, url } = await withPlayerLock(() => sabrData(yt, id, clientName, po));
+      checkAborted(ctx);
       const status = info.playability_status;
       if (status?.status !== 'OK') {
         const reason = status?.reason || status?.status || 'nicht abspielbar';
@@ -797,7 +1170,7 @@ async function trySabr(id, group, ctx, names = SABR_CLIENTS) {
       }
       const maxHeight = Math.max(0, ...heights.filter((h) => h <= ctx.maxHeight)) || Math.min(...heights);
       const dubbed = notOriginalAudio(sd.adaptive_formats);
-      const manifest = await info.toDash({ manifest_options: { is_sabr: true }, format_filter: (f) => !mp4(f) || dubbed(f) });
+      const manifest = await withPlayerLock(() => info.toDash({ manifest_options: { is_sabr: true }, format_filter: (f) => !mp4(f) || dubbed(f) }));
       ctx.trail.push(`${label}: bis ${maxHeight}p${po ? ' (mit PO-Token)' : ''}`);
       return {
         id,
@@ -809,6 +1182,8 @@ async function trySabr(id, group, ctx, names = SABR_CLIENTS) {
         isLive: false,
         client: label,
         account: Boolean(group.account),
+        captions: captionTracks(info),
+        storyboard: storyboardOf(info),
         kind: 'sabr',
         manifest,
         maxHeight,
@@ -826,6 +1201,7 @@ async function trySabr(id, group, ctx, names = SABR_CLIENTS) {
         },
       };
     } catch (e) {
+      if (e instanceof StreamAborted) throw e;
       failed(ctx, `${label}: ${shortError(e)}`);
     }
   }
@@ -881,10 +1257,11 @@ export async function mintPoToken(binding) {
  * Mit Google-Konto: Scheitert es anonym (Bot-Sperre, Altersgrenze …), geht es mit Konto
  * weiter – und nach einer Sperre für eine Weile gleich mit Konto.
  */
-export async function stream(id, { maxHeight = 1080, exclude = [], clients = preferredClients(exclude), check = true, notes = [] } = {}) {
+export async function stream(id, { maxHeight = 1080, exclude = [], clients = preferredClients(exclude), check = true, notes = [], signal = null } = {}) {
   if (!VIDEO_ID.test(id)) throw new Error('Ungültige Video-ID');
   // [notes]: was bei diesem Video schon im Player gescheitert ist (steht mit in den Details)
-  const ctx = { reasons: [...notes], candidates: [], trail: [...notes], maxHeight, check, fetchImpl: options.fetch ?? globalThis.fetch };
+  // [signal]: bricht die Suche ab, sobald ein anderes Video gewählt wird (keine Anfragen für Weggeklicktes)
+  const ctx = { reasons: [...notes], candidates: [], trail: [...notes], maxHeight, check, fetchImpl: options.fetch ?? globalThis.fetch, signal };
   const withAccount = Boolean(options.account?.loggedIn());
 
   const anonymous = async () => {
@@ -914,7 +1291,10 @@ export async function stream(id, { maxHeight = 1080, exclude = [], clients = pre
   if (process.env.GXTUBE_FORCE_SABR === '1' || Date.now() < sabrFirstUntil) {
     const useAccount = sabrFirstAccount && process.env.GXTUBE_FORCE_SABR !== '1';
     if (sabrAllowed(useAccount)) {
-      const sabr = await (useAccount ? sabrAccount() : sabrAnonymous()).catch(() => null);
+      const sabr = await (useAccount ? sabrAccount() : sabrAnonymous()).catch((e) => {
+        if (e instanceof StreamAborted) throw e;
+        return null;
+      });
       if (sabr) return chosen(sabr);
     }
   }
@@ -922,6 +1302,7 @@ export async function stream(id, { maxHeight = 1080, exclude = [], clients = pre
   let setupError = null;
   let accountExpired = false;
   for (const group of order) {
+    checkAborted(ctx);
     let g;
     try {
       g = await group();
@@ -953,9 +1334,11 @@ export async function stream(id, { maxHeight = 1080, exclude = [], clients = pre
         return chosen(sabr);
       }
     } catch (e) {
+      if (e instanceof StreamAborted) throw e;
       failed(ctx, `${useAccount ? ACCOUNT_PREFIX : ''}SABR: ${shortError(e)}`);
     }
   }
+  checkAborted(ctx);
   // Keiner in voller Qualität: die beste Notlösung nehmen
   const fallback = bestCandidate(ctx.candidates);
   if (fallback) return chosen(fallback);
@@ -994,6 +1377,69 @@ export async function stream(id, { maxHeight = 1080, exclude = [], clients = pre
   const signInWindow = accountMethod() === 'device' && reasons.some((r) => r.startsWith(ACCOUNT_PREFIX));
   if (signInWindow) message += ' Tipp: Im Fenster anmelden – dann lädt GX Tube wie YouTube im Browser.';
   throw new StreamError(message, reasons, { signIn, signInWindow });
+}
+
+// ------------------------------------------------------------------ Untertitel
+
+const TIMEDTEXT = /^https:\/\/www\.youtube\.com\/api\/timedtext\?/;
+
+function vttStamp(ms) {
+  const pad = (n, w = 2) => String(n).padStart(w, '0');
+  return `${pad(Math.floor(ms / 3600000))}:${pad(Math.floor(ms / 60000) % 60)}:${pad(Math.floor(ms / 1000) % 60)}.${pad(ms % 1000, 3)}`;
+}
+
+/** YouTubes XML-Untertitel (Format 3 bzw. das alte Format 1) als WebVTT. */
+export function timedTextToVtt(xml) {
+  const attr = (attrs, name) => attrs.match(new RegExp(`\\b${name}="([^"]*)"`))?.[1];
+  const clean = (s) => xmlText(String(s).replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '')).trim();
+  const cues = [];
+  for (const m of String(xml).matchAll(/<p\b([^>]*)>([\s\S]*?)<\/p>/g)) {
+    const t = Number(attr(m[1], 't'));
+    const d = Number(attr(m[1], 'd'));
+    if (Number.isFinite(t) && Number.isFinite(d)) cues.push([t, t + d, clean(m[2])]);
+  }
+  if (!cues.length) {
+    for (const m of String(xml).matchAll(/<text\b([^>]*)>([\s\S]*?)<\/text>/g)) {
+      const start = Number(attr(m[1], 'start'));
+      const dur = Number(attr(m[1], 'dur'));
+      if (Number.isFinite(start) && Number.isFinite(dur)) cues.push([Math.round(start * 1000), Math.round((start + dur) * 1000), clean(m[2])]);
+    }
+  }
+  const body = cues.filter((c) => c[2]).map(([a, b, t]) => `${vttStamp(a)} --> ${vttStamp(Math.max(b, a + 1))}\n${t}`);
+  return body.length ? `WEBVTT\n\n${body.join('\n\n')}\n` : '';
+}
+
+/**
+ * Untertitel als WebVTT laden. [url]: Adresse von YouTube, [lang]/[auto]: welche Spur. Lehnt YouTube die
+ * Adresse ab (manche Web-Clients verlangen inzwischen ein PO-Token), kommt dieselbe Spur über den iOS-Client.
+ * (Automatisch übersetzte Untertitel – tlang= – lehnt YouTube seit 2026 ohne Web-Player ab, daher nicht angeboten.)
+ */
+export async function captionText(videoId, { url, lang, auto = false } = {}) {
+  if (!VIDEO_ID.test(videoId)) throw new Error('Ungültige Video-ID');
+  const fetchImpl = options.fetch ?? globalThis.fetch;
+  const load = async (u) => {
+    if (!TIMEDTEXT.test(u ?? '')) return null;
+    const target = new URL(u);
+    target.searchParams.set('fmt', 'vtt');
+    target.searchParams.delete('tlang');
+    const ua = streamUserAgent(u);
+    const res = await fetchImpl(target.toString(), ua ? { headers: { 'User-Agent': ua } } : {});
+    if (!res.ok) return null;
+    const body = await res.text();
+    if (/^﻿?WEBVTT/.test(body)) return body.includes('-->') ? body : null;
+    return body.includes('<') ? timedTextToVtt(body) || null : null;
+  };
+  const first = await load(url).catch(() => null);
+  if (first) return first;
+  return guarded(async () => {
+    const yt = await client();
+    const info = await yt.getBasicInfo(videoId, { client: 'IOS' });
+    const tracks = captionTracks(info);
+    const track = tracks.find((t) => t.lang === lang && t.auto === Boolean(auto)) ?? tracks.find((t) => t.lang === lang);
+    const second = track ? await load(track.url).catch(() => null) : null;
+    if (!second) throw new Error('Untertitel gerade nicht verfügbar');
+    return second;
+  });
 }
 
 // ------------------------------------------------------------------ Anmeldung per Code
@@ -1227,7 +1673,11 @@ async function rssFeed(c) {
   return parseFeed(await res.text(), c);
 }
 
-async function channelFeed(c) {
+// Ohne RSS je Aktualisierung höchstens so viele Kanalseiten als Ersatz – bei 500 Abos wären das sonst
+// 1000 Anfragen auf einen Schlag (Kanalseite + Videos), und genau das löst Bot-Sperren aus
+export const FALLBACK_PAGES_PER_REFRESH = 25;
+
+async function channelFeed(c, budget) {
   const cached = feedCache.get(c.id);
   if (cached && Date.now() - cached.at < FEED_TTL_MS) return cached.videos;
   let videos = null;
@@ -1240,7 +1690,9 @@ async function channelFeed(c) {
     }
   }
   if (!videos) {
-    // Ersatz: erste Seite der Kanalvideos
+    // Ersatz: erste Seite der Kanalvideos – nur solange das Kontingent reicht, sonst das Alte behalten
+    if (budget.pages <= 0) return cached?.videos ?? [];
+    budget.pages--;
     const page = await channel(c.id);
     videos = page.items.map((v) => ({ ...v, publishedAt: approxPublished(v.publishedText) }));
   }
@@ -1248,17 +1700,51 @@ async function channelFeed(c) {
   return videos;
 }
 
+let accountFeedCache = { at: 0, videos: null };
+
+/** Abo-Feed des angemeldeten Google-Kontos: eine einzige Anfrage statt einer pro Kanal. */
+async function accountSubscriptionFeed() {
+  if (accountFeedCache.videos && Date.now() - accountFeedCache.at < FEED_TTL_MS) return accountFeedCache.videos;
+  const { yt } = await accountClient();
+  const feed = await yt.getSubscriptionsFeed();
+  const videos = unique((feed.videos ?? []).map(toVideo)).map((v) => ({ ...v, publishedAt: approxPublished(v.publishedText) }));
+  accountFeedCache = { at: Date.now(), videos };
+  return videos;
+}
+
+/** Nur für Tests: RSS als ausgefallen markieren bzw. zurücksetzen und Zwischenspeicher leeren. */
+export function _setRssOff(until) {
+  rssOffUntil = until;
+  rssFailures = 0;
+  feedCache.clear();
+  accountFeedCache = { at: 0, videos: null };
+}
+
 /** Neueste Videos aller Abos (ohne Shorts), neueste zuerst. */
 export async function subscriptionFeed(channels, limit = 48) {
   // Früher nur die ersten 100 Abos – von allen weiteren Kanälen kam nie ein neues Video
   const list = (channels ?? []).filter((c) => CHANNEL_ID.test(c?.id ?? '')).slice(0, 500);
+  const finish = (videos) =>
+    unique(videos)
+      .filter((v) => !v.isShort)
+      .sort((a, b) => b.publishedAt - a.publishedAt)
+      .slice(0, limit);
+  // RSS gerade abgeschaltet und im Fenster bei Google angemeldet: der Abo-Feed von YouTube selbst
+  const useAccountFeed = () => Date.now() < rssOffUntil && accountMethod() === 'cookies';
+  if (useAccountFeed()) {
+    const videos = await accountSubscriptionFeed().catch(() => null);
+    if (videos?.length) return finish(videos);
+  }
+  const budget = { pages: FALLBACK_PAGES_PER_REFRESH };
   const all = [];
   for (let i = 0; i < list.length; i += 12) {
-    const batch = await Promise.all(list.slice(i, i + 12).map((c) => channelFeed(c).catch(() => [])));
+    // RSS ist unterwegs ausgefallen: statt weiter Kanal für Kanal einmal den Feed des Kontos
+    if (i > 0 && useAccountFeed()) {
+      const videos = await accountSubscriptionFeed().catch(() => null);
+      if (videos?.length) return finish([...all, ...videos]);
+    }
+    const batch = await Promise.all(list.slice(i, i + 12).map((c) => channelFeed(c, budget).catch(() => [])));
     for (const videos of batch) all.push(...videos);
   }
-  return all
-    .filter((v) => !v.isShort)
-    .sort((a, b) => b.publishedAt - a.publishedAt)
-    .slice(0, limit);
+  return finish(all);
 }
