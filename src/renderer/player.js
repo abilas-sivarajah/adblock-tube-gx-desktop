@@ -36,11 +36,12 @@ function errorDetail(err) {
 const SAVE_EVERY_MS = 10000;
 
 export class Player {
-  constructor(video, { onStatus, onSkip, onTracks } = {}) {
+  constructor(video, { onStatus, onSkip, onTracks, onStalled } = {}) {
     this.video = video;
     this.onStatus = onStatus ?? (() => {});
     this.onSkip = onSkip ?? (() => {});
     this.onTracks = onTracks ?? (() => {});
+    this.onStalled = onStalled ?? (() => {});
     this.token = null;
     this.status = 'idle';
     this.segments = [];
@@ -53,6 +54,7 @@ export class Player {
     this.loadSeq = 0;
     this.shaka = null;
     this.sabr = null; // SABR-Adapter des aktuellen Videos (nur bei kind 'sabr')
+    this.stallTimer = null;
   }
 
   #dropSabr() {
@@ -77,8 +79,17 @@ export class Player {
     this.shaka.addEventListener('trackschanged', () => this.onTracks());
     this.shaka.addEventListener('buffering', (e) => {
       if (!this.token) return;
-      if (e.buffering) this.#setStatus('buffering');
-      else if (this.status !== 'loading') this.#setStatus(this.video.paused ? 'paused' : 'playing');
+      clearTimeout(this.stallTimer);
+      if (e.buffering) {
+        this.#setStatus('buffering');
+        if (this.kind === 'twitch' && this.isLive) {
+          this.stallTimer = setTimeout(() => {
+            if (this.status === 'buffering' && this.kind === 'twitch' && this.isLive) this.onStalled();
+          }, 4500);
+        }
+      } else if (this.status !== 'loading') {
+        this.#setStatus(this.video.paused ? 'paused' : 'playing');
+      }
     });
     this.#configure();
 
@@ -205,6 +216,7 @@ export class Player {
 
   /** Wird angezeigt, sobald der Hauptprozess ein Video lädt (Stream kommt gleich). */
   async prepare(token) {
+    clearTimeout(this.stallTimer);
     this.token = token;
     this.segments = [];
     this.skipped.clear();
@@ -218,6 +230,7 @@ export class Player {
 
   async load({ token, stream, startMs, maxQuality }) {
     const seq = ++this.loadSeq;
+    clearTimeout(this.stallTimer);
     this.httpErrors = [];
     this.token = token;
     this.kind = stream.kind;
@@ -253,6 +266,7 @@ export class Player {
       if (seq !== this.loadSeq) return;
       this.video.playbackRate = this.isLive ? 1 : speed;
       await this.video.play().catch(() => {});
+      this.#skipSponsors();
       this.onTracks();
     } catch (err) {
       if (seq !== this.loadSeq) return;
@@ -264,6 +278,7 @@ export class Player {
 
   async stop() {
     ++this.loadSeq;
+    clearTimeout(this.stallTimer);
     this.token = null;
     this.status = 'idle';
     this.onStatus('idle');
@@ -279,6 +294,7 @@ export class Player {
     // Shaka meldet Ladefehler als "behebbar" und versucht es endlos weiter. Ein einzelner Aussetzer
     // ist egal – lehnt YouTube aber ab (403) oder scheitert es wiederholt, hilft nur ein anderer Client.
     if (err?.severity !== undefined && err.severity !== shaka.util.Error.Severity.CRITICAL) {
+      if (this.kind === 'twitch' && this.isLive && (http || err?.category === 1 || err?.category === 3)) this.onStalled();
       if (!http) return;
       const now = Date.now();
       this.httpErrors = (this.httpErrors ?? []).filter((t) => now - t < 30_000);
@@ -303,6 +319,7 @@ export class Player {
 
   setSegments(segments) {
     this.segments = Array.isArray(segments) ? segments : [];
+    this.#skipSponsors();
   }
 
   #skipSponsors() {
@@ -311,7 +328,16 @@ export class Player {
     const seg = this.segments.find((s) => pos >= s.startMs && pos < s.endMs - 500 && !this.skipped.has(s.uuid));
     if (!seg) return;
     this.skipped.add(seg.uuid);
-    this.video.currentTime = seg.endMs / 1000;
+    let endMs = seg.endMs;
+    // Direkt anschließende oder überlappende Segmente in einem einzigen Sprung mitnehmen
+    while (true) {
+      const next = this.segments.find((s) => !this.skipped.has(s.uuid) && s.startMs <= endMs + 500 && s.endMs > endMs);
+      if (!next) break;
+      this.skipped.add(next.uuid);
+      endMs = next.endMs;
+    }
+    const dur = this.durationMs;
+    this.video.currentTime = (dur > 0 ? Math.min(endMs, dur) : endMs) / 1000;
     this.onSkip(seg);
   }
 

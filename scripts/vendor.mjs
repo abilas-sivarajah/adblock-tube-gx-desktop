@@ -34,7 +34,7 @@ const TWITCH_INIT = {
   clientId: 'kimne78kx3ncx6brgo4mv6wki5h1ko',
   channel: 'gx-twitch-adblock', // BroadcastChannel für Meldungen und das Konto (Authorization)
   relay: false,
-  adSpoofing: false, // Werbung nie als gesehen melden
+  adSpoofing: true, // Primär Ad-Spoofing versuchen, Ersatz-Sitzung als Fallback
 };
 const twitchSrc = fs.readFileSync(path.join(root, 'third_party/adblock-gx/twitch_worker.js'), 'utf8');
 const hold = fs.readFileSync(path.join(root, 'third_party/adblock-gx/twitch_hold.ts')).toString('base64');

@@ -56,10 +56,16 @@
         nativeClean: 3        // own session ad-free for this many new playlists -> back to it
     }, INIT.timing || {});
     const AD_TEXT = /stitched-ad|X-TV-TWITCH-AD|\/adsquared\/|SCTE35-OUT|EXT-X-CUE-OUT|CLASS="twitch-(?:stitched-)?ad(?:-|")|"MIDROLL"/i;
-    const AD_SPOOFING_ENABLED = INIT.adSpoofing === true;  // setting, off by default
+    let adSpoofing = INIT.adSpoofing !== false;  // primär aktiv (Ad-Spoofing zuerst, Ersatz-Sitzung als Fallback)
     const GQL_EVENT_HASH = '7e6c69e6eb59f8ccb97ab73686f3d8b7d85a72a0298745ccd8bfc68e4054ca5b';
     const spoofedAdIds = new Set();
     const recentSpoofedAdIds = new Map(); // adId -> timestamp, capped at 50
+
+    function randomHex(n) {
+        let s = '';
+        for (let i = 0; i < n; i++) s += Math.floor(Math.random() * 16).toString(16);
+        return s;
+    }
 
     const realFetch = self.fetch.bind(self);
     const contexts = new Map();      // 'live:<login>' | 'vod:<id>' -> playback context
@@ -67,12 +73,15 @@
     const tokens = new Map();        // ctx key|type -> {value, signature, until}
     const relayed = new Map();       // relay request id -> resolve
     const seenAdIds = new Set();     // stitched-ad ids already counted for the statistics
+    const defaultDeviceId = INIT.deviceId || randomHex(32);
+    const defaultSessionId = randomHex(16);
     const viewer = Object.assign({}, INIT.viewer || {});  // headers of Twitch's own GQL requests
     if (INIT.authHeader && !viewer.Authorization) viewer.Authorization = INIT.authHeader;
-    if (INIT.deviceId && !viewer['X-Device-Id']) {
-        viewer['Device-ID'] = INIT.deviceId;
-        viewer['X-Device-Id'] = INIT.deviceId;
+    if (!viewer['X-Device-Id']) {
+        viewer['Device-ID'] = defaultDeviceId;
+        viewer['X-Device-Id'] = defaultDeviceId;
     }
+    if (!viewer['Client-Session-Id']) viewer['Client-Session-Id'] = defaultSessionId;
     let pageIsVod = !!INIT.vod;
     let sessionSeq = 0;
     let fallbackMasked = false;
@@ -82,8 +91,13 @@
     if (channel) {
         channel.addEventListener('message', function (e) {
             const d = e.data || {};
-            if (d.event === 'viewer') Object.assign(viewer, d.headers || {});
+            if (d.event === 'viewer') {
+                Object.assign(viewer, d.headers || {});
+                if (!viewer.Authorization) delete viewer.Authorization;
+                if (typeof d.vod === 'boolean') pageIsVod = d.vod;
+            }
             else if (d.event === 'page') pageIsVod = !!d.vod;
+            else if (d.event === 'spoofing') adSpoofing = d.enabled !== false;
             else if (d.event === 'fetch-response' && relayed.has(d.id)) relayed.get(d.id)(d);
             else if (d.event === 'stalled') onStalled();
         });
@@ -149,7 +163,7 @@
     }
 
     function isAdUri(uri) {
-        return /stitched|\/adsquared\/|\/_404\//.test(uri);
+        return /stitched|\/adsquared\/|\/_404\/|edge\.ads\.twitch\.tv|amazon-adsystem/i.test(uri);
     }
 
     function isAdMarker(line) {
@@ -190,51 +204,53 @@
         return end || null;
     }
 
-    // ---- ad spoofing (TTV-AB technique, only if switched on): report ad impressions & quartiles to Twitch GQL ----
-    async function notifyAdComplete(text) {
-        if (!AD_SPOOFING_ENABLED || !text || typeof text !== 'string') return;
-        const lines = text.split('\n');
+    // ---- ad spoofing (TTV-AB technique): report ad impressions & quartiles to Twitch GQL ----
+    async function notifyAdComplete(text, ctx) {
+        if (!adSpoofing || !text || typeof text !== 'string') return false;
+        const lines = text.split(/\r?\n/);
         const adLines = [];
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
-            if (line.startsWith('#EXT-X-DATERANGE') && (line.indexOf('stitched-ad') !== -1 || line.indexOf('twitch-stitched-ad') !== -1)) {
+            if (line.startsWith('#EXT-X-DATERANGE') && (line.indexOf('stitched-ad') !== -1 || line.indexOf('twitch-stitched-ad') !== -1 || line.indexOf('X-TV-TWITCH-AD-RADS-TOKEN') !== -1)) {
                 adLines.push(line);
             }
         }
-        if (!adLines.length) return;
+        if (!adLines.length) return false;
 
         const podLenMatch = text.match(/X-TV-TWITCH-AD-POD-LENGTH="(\d+)"/);
         const explicitPodLength = podLenMatch ? parseInt(podLenMatch[1], 10) : 0;
-        const hasExplicitPodLength = explicitPodLength > 0;
-        const podLength = hasExplicitPodLength ? explicitPodLength : adLines.length;
-
-        if (hasExplicitPodLength && spoofedAdIds.size >= podLength) return;
+        const podLength = explicitPodLength > 0 ? explicitPodLength : adLines.length;
+        const ctxSpoofed = (ctx && ctx.spoofedAdIds) || spoofedAdIds;
+        const now = Date.now();
+        let spoofedAny = false;
 
         for (let i = 0; i < adLines.length; i++) {
-            if (hasExplicitPodLength && spoofedAdIds.size >= podLength) break;
             const line = adLines[i];
             const attr = parseAttrs(line);
-            const idMatch = line.match(/\bID="([^"]+)"/);
-            const stitchedAdId = (idMatch && idMatch[1]) || attr['ID'] || '';
-            if (!stitchedAdId) continue;
-
-            if (recentSpoofedAdIds.has(stitchedAdId)) {
-                spoofedAdIds.add(stitchedAdId);
-                continue;
-            }
-            if (spoofedAdIds.has(stitchedAdId)) continue;
-
             const radToken = attr['X-TV-TWITCH-AD-RADS-TOKEN'];
             if (!radToken) continue;
 
-            const rollType = (attr['X-TV-TWITCH-AD-ROLL-TYPE'] || '').toLowerCase();
+            const idMatch = line.match(/\bID="([^"]+)"/);
+            const stitchedAdId = (idMatch && idMatch[1]) || attr['ID'] || attr['X-TV-TWITCH-AD-COMMERCIAL-ID'] || radToken.slice(0, 32);
+            if (!stitchedAdId) continue;
+
+            const recentAt = recentSpoofedAdIds.get(stitchedAdId);
+            if (recentAt && now - recentAt < 90000) {
+                ctxSpoofed.add(stitchedAdId);
+                spoofedAdIds.add(stitchedAdId);
+                continue;
+            }
+            if (ctxSpoofed.has(stitchedAdId)) continue;
+
+            const rollType = (attr['X-TV-TWITCH-AD-ROLL-TYPE'] || 'midroll').toLowerCase();
             const adPos = parseInt(attr['X-TV-TWITCH-AD-POD-POSITION'] || String(i), 10) || 0;
-            const dur = parseFloat(attr['X-TV-TWITCH-AD-DURATION'] || attr['DURATION'] || attr['X-TV-TWITCH-AD-POD-FILLED-DURATION'] || '0') || 0;
-            const adDuration = Math.round(dur);
+            const dur = parseFloat(attr['X-TV-TWITCH-AD-DURATION'] || attr['DURATION'] || attr['X-TV-TWITCH-AD-POD-FILLED-DURATION'] || '30') || 30;
+            const adDuration = Math.max(1, Math.round(dur));
 
             const payload = {
                 stitched: true,
                 ad_id: stitchedAdId,
+                ad_session_id: attr['X-TV-TWITCH-AD-SESSION-ID'] || attr['X-TV-TWITCH-AD-POD-ID'] || '',
                 roll_type: rollType,
                 creative_id: attr['X-TV-TWITCH-AD-CREATIVE-ID'] || '',
                 order_id: attr['X-TV-TWITCH-AD-ORDER-ID'] || '',
@@ -266,8 +282,9 @@
                 };
             };
 
+            ctxSpoofed.add(stitchedAdId);
             spoofedAdIds.add(stitchedAdId);
-            recentSpoofedAdIds.set(stitchedAdId, Date.now());
+            recentSpoofedAdIds.set(stitchedAdId, now);
             while (recentSpoofedAdIds.size > 50) {
                 const oldest = recentSpoofedAdIds.keys().next().value;
                 if (oldest === undefined) break;
@@ -275,39 +292,41 @@
             }
 
             const batch = [
-                makePacket('video_ad_impression'),
-                makePacket('video_ad_quartile_complete', { quartile: 1 }),
-                makePacket('video_ad_quartile_complete', { quartile: 2 }),
-                makePacket('video_ad_quartile_complete', { quartile: 3 }),
-                makePacket('video_ad_quartile_complete', { quartile: 4 }),
+                makePacket('video_ad_impression', { ad_time: 0 }),
+                makePacket('video_ad_quartile_complete', { quartile: 1, ad_time: Math.round(adDuration * 0.25) }),
+                makePacket('video_ad_quartile_complete', { quartile: 2, ad_time: Math.round(adDuration * 0.5) }),
+                makePacket('video_ad_quartile_complete', { quartile: 3, ad_time: Math.round(adDuration * 0.75) }),
+                makePacket('video_ad_quartile_complete', { quartile: 4, ad_time: adDuration }),
             ];
-            if (hasExplicitPodLength && spoofedAdIds.size >= podLength) {
-                batch.push(makePacket('video_ad_pod_complete'));
+            if (adPos + 1 >= podLength || i === adLines.length - 1 || ctxSpoofed.size >= podLength) {
+                batch.push(makePacket('video_ad_pod_complete', { ad_time: adDuration }));
             }
 
-            const headers = gqlHeaders(true);
-            if (!headers['X-Device-Id']) {
-                headers['X-Device-Id'] = headers['Device-ID'] || INIT.deviceId || 'oauth';
-            }
-
-            try {
-                realFetch(GQL_URL, {
-                    method: 'POST',
-                    headers: headers,
-                    body: JSON.stringify(batch),
-                }).then(function (response) {
-                    if (response && response.status !== 200) {
-                        report('error', {error: 'Ad spoofing GQL status ' + response.status});
+            let ok = false;
+            const tries = viewer.Authorization ? [true, false] : [false];
+            for (let t = 0; t < tries.length; t++) {
+                try {
+                    const res = await gql(batch, tries[t]);
+                    const hasError = Array.isArray(res)
+                        ? res.some(function (r) { return r && r.errors && r.errors.length; })
+                        : !!(res && res.errors && res.errors.length);
+                    if (!hasError) {
+                        ok = true;
+                        break;
                     }
-                }).catch(function (err) {
-                    report('error', {error: 'Ad spoofing failed: ' + (err && err.message || err)});
-                });
-            } catch (err) {
-                report('error', {error: 'Ad spoofing sync error: ' + (err && err.message || err)});
+                } catch (err) {}
             }
-
-            report('ad-spoofed', {count: 1, id: stitchedAdId, roll: rollType});
+            if (ok) {
+                spoofedAny = true;
+                report('ad-spoofed', {count: 1, id: stitchedAdId, roll: rollType});
+            } else {
+                ctxSpoofed.delete(stitchedAdId);
+                spoofedAdIds.delete(stitchedAdId);
+                recentSpoofedAdIds.delete(stitchedAdId);
+                report('error', {error: 'Ad spoofing failed'});
+            }
         }
+        return spoofedAny;
     }
 
     // seconds of ads seen (each stitched ad once) - for the statistics
@@ -400,7 +419,12 @@
                 if (line.charAt(0) === '#' && !SEG_TAG.test(line)) { p.header.push(line); continue; }
                 inHeader = false;
             }
-            if (lastUri >= 0 && i > lastUri) { p.tail.push(line); continue; }  // prefetch hints etc.
+            if (lastUri >= 0 && i > lastUri) {
+                if (!isAdLine(line) && !(line.startsWith('#EXT-X-TWITCH-PREFETCH:') && isAdUri(line.slice(23)))) {
+                    p.tail.push(line);
+                }
+                continue;
+            }  // prefetch hints etc.
             if (line === '#EXT-X-DISCONTINUITY') {
                 disc = true;
                 map = null;  // Twitch: fMP4 ads inside MPEG-TS streams - an ad's MAP must not stick to live segments
@@ -541,7 +565,7 @@
                 return null;
             }
             ctx.wait = null;
-        } else if (tl.switched && tl.lastOut >= 0) {
+        } else if ((tl.switched || opts.strip) && tl.lastOut >= 0) {
             // same source, but cut-out ads leave a gap in the numbering: continue behind a discontinuity
             const next = segs.find(function (s) { return s.seq + tl.offset > tl.lastOut; });
             if (next && next.seq + tl.offset > tl.lastOut + 1) switchTo(tl, id, segs, true);
@@ -665,14 +689,13 @@
 
     // ---- backup sessions ----
     function gqlHeaders(asViewer) {
-        const h = {'Client-ID': INIT.clientId, 'Content-Type': 'text/plain;charset=UTF-8'};
-        const device = viewer['X-Device-Id'] || INIT.deviceId;
-        if (device) {
-            h['Device-ID'] = device;
-            h['X-Device-Id'] = device;
-        }
+        const clientId = (asViewer && viewer['Client-ID']) || INIT.clientId;
+        const h = {'Client-ID': clientId, 'Content-Type': 'text/plain;charset=UTF-8'};
+        const device = viewer['X-Device-Id'] || viewer['Device-ID'] || defaultDeviceId;
+        h['Device-ID'] = device;
+        h['X-Device-Id'] = device;
+        h['Client-Session-Id'] = viewer['Client-Session-Id'] || defaultSessionId;
         if (viewer['Client-Version']) h['Client-Version'] = viewer['Client-Version'];
-        if (viewer['Client-Session-Id']) h['Client-Session-Id'] = viewer['Client-Session-Id'];
         if (asViewer) {
             if (viewer.Authorization) h.Authorization = viewer.Authorization;
             if (viewer['Client-Integrity']) h['Client-Integrity'] = viewer['Client-Integrity'];
@@ -730,11 +753,11 @@
             if (asViewer && !viewer.Authorization) break;
             const j = await gql({operationName: 'PlaybackAccessToken_Template', query: GQL_QUERY, variables: variables}, asViewer);
             const t = j && j.data && (j.data.streamPlaybackAccessToken || j.data.videoPlaybackAccessToken);
+            if (t && t.authorization && t.authorization.isForbidden) {
+                error = 'forbidden ' + (t.authorization.forbiddenReasonCode || '');
+                continue;
+            }
             if (t && t.value && t.signature) {
-                if (t.authorization && t.authorization.isForbidden) {
-                    error = 'forbidden ' + (t.authorization.forbiddenReasonCode || '');
-                    continue;
-                }
                 const token = {value: t.value, signature: t.signature, until: tokenUntil(t.value)};
                 tokens.set(key, token);
                 return token;
@@ -742,12 +765,6 @@
             if (j && j.errors && j.errors.length) error = String(j.errors[0].message || error);
         }
         throw new Error(error);
-    }
-
-    function randomHex(n) {
-        let s = '';
-        for (let i = 0; i < n; i++) s += Math.floor(Math.random() * 16).toString(16);
-        return s;
     }
 
     async function openSession(ctx, type, old) {
@@ -850,7 +867,13 @@
     function searchHq(ctx, want, exclude) {
         if (ctx.scan) return ctx.scan;
         if (ctx.bridgeSince && Date.now() - ctx.bridgeSince < T.hqDwell) return Promise.resolve(null);
-        const order = HQ_TYPES.filter(function (t) { return t !== exclude; });
+        const order = HQ_TYPES.filter(function (t) { return t !== exclude; }).sort(function (a, b) {
+            const sa = ctx.sessions.get(a), sb = ctx.sessions.get(b);
+            const ca = sa ? sa.cleanLooks : 0, cb = sb ? sb.cleanLooks : 0;
+            if (ca !== cb) return cb - ca;
+            const ea = sa ? sa.errors : 0, eb = sb ? sb.errors : 0;
+            return ea - eb;
+        });
         ctx.scan = (async function () {
             for (let i = 0; i < order.length; i++) {
                 const b = await backupPlaylist(ctx, order[i], want, true);
@@ -883,7 +906,6 @@
     // ---- what the player gets ----
     function startAd(ctx, text) {
         countAdSeconds(text);
-        notifyAdComplete(text).catch(function () {});
         if (ctx.inAd) return;
         ctx.inAd = true;
         ctx.sessions.forEach(function (s) { if (s.last === 'werbung') s.retryAt = 0; });  // new ad break: ask again
@@ -894,6 +916,7 @@
         unmask(ctx);
         if (!ctx.inAd) return;
         ctx.inAd = false;
+        if (ctx.spoofedAdIds) ctx.spoofedAdIds.clear();
         spoofedAdIds.clear();
         report('ad-end');
     }
@@ -933,9 +956,34 @@
 
     async function processLive(ctx, url, want, text) {
         const tl = ctx.tl;
-        const nat = parseMedia(text, url);
+        let nat = parseMedia(text, url);
         if (!nat.segs.length || nat.ended) return text;
-        const natAds = hasAds(text);
+        let natAds = hasAds(text);
+
+        // 1. PRIMÄR: Ad-Spoofing versuchen, sobald Werbung in der eigenen Sitzung auftaucht.
+        // Wenn Twitch nach dem Spoofing (RecordAdEvent) die Werbung sofort aus der eigenen Playlist
+        // entfernt, läuft der Original-Stream ohne Qualitätswechsel direkt weiter.
+        if (natAds && adSpoofing) {
+            const spoofed = await notifyAdComplete(text, ctx);
+            if (spoofed) {
+                try {
+                    const freshText = await fetchText(url);
+                    const freshNat = parseMedia(freshText, url);
+                    if (freshNat.segs.length && !freshNat.ended) {
+                        if (!hasAds(freshText)) {
+                            text = freshText;
+                            nat = freshNat;
+                            natAds = false;
+                            ctx.cleanStreak = T.nativeClean;
+                        } else if (freshNat.segs.some(function (s) { return s.ad; }) && !freshNat.segs[freshNat.segs.length - 1].ad) {
+                            text = freshText;
+                            nat = freshNat;
+                        }
+                    }
+                } catch (e) {}
+            }
+        }
+
         trackNative(ctx, nat, natAds);
         const nid = ctx.nativeId;
 
@@ -950,9 +998,19 @@
                 return out;
             }
         }
+        // Werbung im oberen Teil des HLS-Fensters ist schon vorbei und am Live-Ende liegen wieder Live-Stücke
+        if (natAds && tl.source === nid && nat.segs.some(function (s) { return s.ad; }) && !nat.segs[nat.segs.length - 1].ad) {
+            const out = serve(ctx, url, nid, nat, {strip: true});
+            if (out) {
+                setBridge(ctx, false);
+                endAd(ctx);
+                return out;
+            }
+        }
         if (natAds) startAd(ctx, text);
 
-        // the backup in use
+        // 2. FALLBACK: Wenn die Werbung trotz Ad-Spoofing weiter in der eigenen Playlist steckt,
+        // auf eine werbefreie Ersatz-Sitzung (360p-Brücke bzw. volle Qualität) ausweichen.
         const curType = typeOf(tl.source);
         const cur = curType ? await backupPlaylist(ctx, curType, want, false) : null;
         const curOk = !!cur && !cur.ads;
@@ -1057,10 +1115,10 @@
     }
 
     async function processMediaPlaylist(url, text) {
-        if (hasAds(text)) notifyAdComplete(text).catch(function () {});
         const v = lookupVariant(url);
         if (v && v.ctx.vod) return processVod(url, text);
         if (v) return processLive(v.ctx, url, v.want, text);
+        if (hasAds(text)) notifyAdComplete(text).catch(function () {});
         // a playlist that was not in a master playlist we saw (should not happen): only cover ads
         if (!hasAds(text)) {
             if (fallbackMasked) report('unmasked');
@@ -1089,7 +1147,7 @@
         if (!ctx) {
             ctx = {key: u.key, login: u.login, vod: u.vod, sessions: new Map(), gen: 0, tl: null, inAd: false,
                    masked: false, bridgeSince: 0, scan: null, cleanStreak: 0, natLastSeq: null, fmp4: undefined,
-                   wait: null};
+                   wait: null, spoofedAdIds: new Set()};
             contexts.set(u.key, ctx);
         }
         ctx.usher = url;
@@ -1119,7 +1177,7 @@
             const n = parseInt((url.match(/[?&]n=(\d+)/) || [])[1] || '1', 10);
             return new Response(holdSegment(n), {status: 200, headers: {'Content-Type': 'video/mp2t', 'Cache-Control': 'no-store'}});
         }
-        if (pageIsVod && isVodAdRequest(url, input && input.method ? input : init)) {
+        if (isVodAdRequest(url, input && input.method ? input : init)) {
             report('vod-ad-blocked');
             return new Response(null, {status: 204});
         }
@@ -1154,7 +1212,9 @@
         parseAttrs: parseAttrs,
         notifyAdComplete: notifyAdComplete,
         spoofedAdIds: spoofedAdIds,
-        recentSpoofedAdIds: recentSpoofedAdIds
+        recentSpoofedAdIds: recentSpoofedAdIds,
+        setAdSpoofing: function (on) { adSpoofing = !!on; },
+        viewer: viewer
     };
     report('worker-hooked');
 })();

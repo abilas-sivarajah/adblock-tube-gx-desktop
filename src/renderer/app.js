@@ -38,6 +38,7 @@ const player = new Player(video, {
   onStatus: (s) => renderStatus(s),
   onSkip: (seg) => toast(`${seg.label} übersprungen`),
   onTracks: () => renderQualityButton(),
+  onStalled: () => notifyAdBlock({ event: 'stalled' }),
 });
 
 // ------------------------------------------------------------------ Start
@@ -198,6 +199,9 @@ let lastDegradedHint = 0;
 function onSource({ token, stream, startMs, maxQuality }) {
   if (token !== state.token) return;
   state.stream = stream;
+  if (stream?.kind === 'twitch') {
+    notifyAdBlock({ event: 'viewer', headers: stream.viewer ?? {}, vod: !stream.isLive });
+  }
   player.load({ token, stream, startMs, maxQuality });
   renderQualityButton();
   // YouTube sperrt gerade die höheren Qualitäten – Bescheid sagen (nicht bei jedem Video)
@@ -1736,15 +1740,24 @@ function onTwitchAccount() {
 
 // Werbeblocker: meldet Werbepausen über einen BroadcastChannel
 let adMuted = null;
+let adChannel = null;
+
+function notifyAdBlock(msg) {
+  try {
+    adChannel ??= new BroadcastChannel('gx-twitch-adblock');
+    adChannel.postMessage(msg);
+  } catch {
+    // egal
+  }
+}
 
 function bindAdBlock() {
-  let channel;
   try {
-    channel = new BroadcastChannel('gx-twitch-adblock');
+    adChannel ??= new BroadcastChannel('gx-twitch-adblock');
   } catch {
     return;
   }
-  channel.addEventListener('message', (e) => {
+  adChannel.addEventListener('message', (e) => {
     if (!isTwitch(state.video)) return;
     const d = e.data ?? {};
     if (d.event === 'ad-start') state.ads = (state.ads ?? 0) + 1;

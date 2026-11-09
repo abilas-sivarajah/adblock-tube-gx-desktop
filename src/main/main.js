@@ -410,7 +410,7 @@ async function loadTwitch(token, video, resume, again) {
     send('player:details', { token, details: current.details });
   }
   const p = play.value;
-  current.stream = { kind: 'twitch', url: p.url, isLive: p.isLive, login: p.login, vod: p.vod, client: p.account ? 'Twitch (Konto)' : 'Twitch', account: p.account };
+  current.stream = { kind: 'twitch', url: p.url, isLive: p.isLive, login: p.login, vod: p.vod, client: p.account ? 'Twitch (Konto)' : 'Twitch', account: p.account, viewer: p.viewer ?? null };
   current.resolvedAt = Date.now();
   console.info(`[twitch] ${video.id}${p.account ? ' mit Konto' : ''}${again ? ' (neu geladen)' : ''}`);
   send('player:source', { token, video: current.video, stream: current.stream, startMs: p.isLive ? null : resume, maxQuality: store.settings.maxQuality });

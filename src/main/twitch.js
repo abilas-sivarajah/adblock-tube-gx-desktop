@@ -59,15 +59,30 @@ const USER_FIELDS = 'id login displayName profileImageURL(width: 70)';
 const VIDEO_FIELDS = 'id title lengthSeconds viewCount publishedAt broadcastType previewThumbnailURL(width: 320, height: 180) game { name displayName }';
 const GAME_FIELDS = 'id name displayName viewersCount boxArtURL(width: 188, height: 250)';
 
+function randomHex(n) {
+  let s = '';
+  for (let i = 0; i < n; i++) s += Math.floor(Math.random() * 16).toString(16);
+  return s;
+}
+
+export const deviceId = randomHex(32);
+export const clientSessionId = randomHex(16);
+
 /**
  * Eine GraphQL-Abfrage. [auth]: mit dem angemeldeten Konto (wirft, wenn keins da ist).
  * Gibt data zurück; Teilfehler (errors neben data) werden ignoriert.
  */
-export async function gql(query, variables = {}, { auth = false } = {}) {
+export async function gql(query, variables = {}, { auth = false, clientId = null } = {}) {
   const account = auth ? authImpl() : null;
   if (auth && !account) throw new TwitchError('Nicht bei Twitch angemeldet', { signIn: true });
   // Ohne Konto wie die Fernseher-App: Twitch verlangt dort beim Weiterblättern keine Integritätsprüfung
-  const headers = { 'Client-ID': account?.clientId ?? TV_CLIENT, 'Content-Type': 'application/json' };
+  const headers = {
+    'Client-ID': account?.clientId ?? clientId ?? TV_CLIENT,
+    'Device-ID': deviceId,
+    'X-Device-Id': deviceId,
+    'Client-Session-Id': clientSessionId,
+    'Content-Type': 'application/json',
+  };
   if (account) headers.Authorization = `OAuth ${account.token}`;
   const res = await fetchImpl(GQL_URL, { method: 'POST', headers, body: JSON.stringify({ query, variables }) });
   const json = await res.json().catch(() => null);
@@ -350,12 +365,6 @@ const TOKEN_QUERY =
   '  streamPlaybackAccessToken(channelName: $login, params: {platform: $platform, playerBackend: "mediaplayer", playerType: $playerType}) @include(if: $isLive) { value signature authorization { isForbidden forbiddenReasonCode } __typename }' +
   '  videoPlaybackAccessToken(id: $vodID, params: {platform: $platform, playerBackend: "mediaplayer", playerType: $playerType}) @include(if: $isVod) { value signature __typename } }';
 
-function randomHex(n) {
-  let s = '';
-  for (let i = 0; i < n; i++) s += Math.floor(Math.random() * 16).toString(16);
-  return s;
-}
-
 const FORBIDDEN = {
   UNAUTHORIZED_ENTITLEMENTS: 'Nur für Abonnenten des Kanals – melde dich mit einem Konto an, das den Kanal abonniert hat.',
   GEOBLOCK: 'Dieser Stream ist in deinem Land nicht verfügbar.',
@@ -392,14 +401,22 @@ export async function playback(id) {
   let lastError = null;
   for (const auth of authImpl() ? [true, false] : [false]) {
     try {
-      const data = await gql(TOKEN_QUERY, variables, { auth });
+      const data = await gql(TOKEN_QUERY, variables, { auth, clientId: WEB_CLIENT });
       const tok = data.streamPlaybackAccessToken ?? data.videoPlaybackAccessToken;
       if (!tok?.value || !tok.signature) throw new TwitchError(t.vod ? 'Dieses Video gibt es nicht mehr' : 'Kanal nicht gefunden');
       if (tok.authorization?.isForbidden) {
         const code = tok.authorization.forbiddenReasonCode;
         throw new TwitchError(FORBIDDEN[code] ?? `Twitch erlaubt die Wiedergabe nicht (${code || 'gesperrt'})`, { code, signIn: code === 'UNAUTHORIZED_ENTITLEMENTS' && !authImpl() });
       }
-      return { url: usherUrl({ login: t.login, vod: t.vod, token: tok }), isLive: !t.vod, login: t.login, vod: t.vod, account: auth };
+      const account = auth ? authImpl() : null;
+      const viewer = {
+        'Device-ID': deviceId,
+        'X-Device-Id': deviceId,
+        'Client-Session-Id': clientSessionId,
+        'Client-ID': account?.clientId ?? WEB_CLIENT,
+        Authorization: account?.token ? `OAuth ${account.token}` : '',
+      };
+      return { url: usherUrl({ login: t.login, vod: t.vod, token: tok }), isLive: !t.vod, login: t.login, vod: t.vod, account: auth, viewer };
     } catch (err) {
       lastError = err;
       if (err.code && FORBIDDEN[err.code] && !auth) break;
