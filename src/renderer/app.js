@@ -1285,7 +1285,7 @@ async function renderSettings() {
   f.append(toggleRow('Chat gleich zeigen', 'Den Stream-Chat sofort neben Live-Streams öffnen. Sonst startet er ausgeblendet – einblenden mit „c“, dem Chat-Knopf oder vom Handy', 'twitchChatOpen'));
   const adRow = el('div', 'set-row');
   const adLabel = el('div', 'label');
-  adLabel.append(el('b', null, 'Twitch-Werbeblocker'), el('span', null, 'Aus Adblock GX: holt während Werbepausen den Stream ohne Werbung, sonst zeigt GX Tube kurz ein schwarzes Bild statt der Werbung. Immer an.'));
+  adLabel.append(el('b', null, 'Twitch-Werbeblocker'), el('span', null, 'Aus Adblock GX: überspringt Werbepausen – der Stream läuft über eine werbefreie zweite Sitzung weiter. Nur wenn Twitch überall Werbung zeigt, kommt so lange ein schwarzes Bild. Immer an.'));
   adRow.append(adLabel, el('span', 'chip', 'Aktiv'));
   f.append(adRow);
 
@@ -1748,7 +1748,7 @@ function bindAdBlock() {
     if (!isTwitch(state.video)) return;
     const d = e.data ?? {};
     if (d.event === 'ad-start') state.ads = (state.ads ?? 0) + 1;
-    else if (d.event === 'masked') showAdOverlay(d.hold ? 'GX Tube blendet die Werbung aus – gleich geht\'s weiter.' : 'Werbung läuft im Hintergrund stumm – gleich geht\'s weiter.', !d.hold);
+    else if (d.event === 'masked') showAdOverlay(d.hold ? 'Twitch zeigt gerade überall Werbung – gleich geht\'s live weiter.' : 'Werbung läuft im Hintergrund stumm – gleich geht\'s weiter.', !d.hold);
     else if (d.event === 'unmasked' || d.event === 'ad-end') hideAdOverlay();
     else if (d.event === 'bridge') {
       if (d.on) showAdOverlay('Werbepause übersprungen – kurz in niedrigerer Qualität.', false, true);

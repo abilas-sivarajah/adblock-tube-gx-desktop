@@ -32,10 +32,14 @@
 
     const INIT = __AB_WORKER_INIT__;
     const HOLD_TS = __AB_HOLD_SEGMENT__;  // base64: 1.024 s black + silence, MPEG-TS (H.264 + AAC)
-    const LQ_TYPE = 'autoplay';           // 360p only, but quick and usually ad-free
-    const TYPES = INIT.backupTypes || ['popout', 'frontpage', 'mobile_web', 'site', 'autoplay'];
-    const HQ_TYPES = TYPES.filter(function (t) { return t !== LQ_TYPE; });
-    const USE_LQ = TYPES.indexOf(LQ_TYPE) !== -1;
+    // 360p only, but quick and usually ad-free - two separate sessions (as the Android and the iOS
+    // app), so one ad decision does not hit both
+    const LQ_ALL = ['autoplay', 'picture-by-picture'];
+    const TYPES = INIT.backupTypes || ['popout', 'frontpage', 'mobile_web', 'site', 'autoplay', 'picture-by-picture'];
+    const LQ_TYPES = TYPES.filter(function (t) { return LQ_ALL.indexOf(t) !== -1; });
+    const HQ_TYPES = TYPES.filter(function (t) { return LQ_ALL.indexOf(t) === -1; });
+    function isLq(type) { return LQ_ALL.indexOf(type) !== -1; }
+    function platformOf(type) { return type === 'autoplay' ? 'android' : type === 'picture-by-picture' ? 'ios' : 'web'; }
     const GQL_URL = 'https://gql.twitch.tv/gql';
     const GQL_QUERY = 'query PlaybackAccessToken_Template($login: String!, $isLive: Boolean!, $vodID: ID!, $isVod: Boolean!, $playerType: String!, $platform: String!) {  streamPlaybackAccessToken(channelName: $login, params: {platform: $platform, playerBackend: "mediaplayer", playerType: $playerType}) @include(if: $isLive) {    value    signature   authorization { isForbidden forbiddenReasonCode }   __typename  }  videoPlaybackAccessToken(id: $vodID, params: {platform: $platform, playerBackend: "mediaplayer", playerType: $playerType}) @include(if: $isVod) {    value    signature   __typename  }}';
     const HOLD_URL = 'https://www.twitch.tv/__adblock_gx_hold.ts';
@@ -44,6 +48,7 @@
         search: 1500,         // longest a player request waits for the full-quality search
         proof: 1500,          // full-quality backup: second ad-free look at least this much later
         adCooldown: 15000,    // a backup that showed ads is asked again after this
+        lqAdCooldown: 5000,   // the same for the 360p bridges: every second without them is black
         errorCooldown: 5000,  // ... after an error (doubles per error, up to 60 s)
         forbidden: 300000,    // ... when Twitch refuses the player type / codec does not match
         stalled: 10000,       // ... when the page reports the video stuck on it
@@ -718,7 +723,7 @@
         const cached = tokens.get(key);
         if (cached && cached.until > Date.now()) return cached;
         const variables = {isLive: !ctx.vod, login: ctx.vod ? '' : ctx.login, isVod: !!ctx.vod, vodID: ctx.vod || '',
-                           playerType: type, platform: type === LQ_TYPE ? 'android' : 'web'};
+                           playerType: type, platform: platformOf(type)};
         let error = 'kein Token';
         // anonymous first; with the viewer's login only if Twitch refuses (e.g. sub-only streams)
         for (const asViewer of [false, true]) {
@@ -766,7 +771,7 @@
     }
 
     function proven(s) {
-        return s.type === LQ_TYPE || s.trusted || (s.cleanLooks >= 2 && Date.now() - s.firstClean >= T.proof);
+        return isLq(s.type) || s.trusted || (s.cleanLooks >= 2 && Date.now() - s.firstClean >= T.proof);
     }
 
     function fail(ctx, type, s, error, cooldown) {
@@ -806,7 +811,7 @@
                 if (ads) {
                     s.cleanLooks = 0;
                     s.trusted = false;
-                    s.retryAt = Date.now() + T.adCooldown;
+                    s.retryAt = Date.now() + (isLq(type) ? T.lqAdCooldown : T.adCooldown);  // ask the bridges more often
                     note(ctx, s, 'werbung', {neu: fresh, endsAt: adEndsAt(text)});
                 } else {
                     if (!s.cleanLooks) s.firstClean = s.lastLook;
@@ -815,7 +820,7 @@
                     note(ctx, s, 'frei', {neu: fresh});
                 }
                 return {type: type, id: type + ':' + s.id, session: s, parsed: parsed, text: text, ads: ads,
-                        lq: type === LQ_TYPE, res: v.res, want: want, proven: !ads && proven(s)};
+                        lq: isLq(type), res: v.res, want: want, proven: !ads && proven(s)};
             } catch (e) {
                 if (!fresh) {  // the old session expired: once more with a new one
                     s.variants = null;
@@ -962,9 +967,11 @@
             }
         }
 
-        // otherwise / better: the 360p bridge right away, full quality once it proved ad-free
-        let lqP = null, hq = null;
-        if (!curOk && USE_LQ && curType !== LQ_TYPE) lqP = backupPlaylist(ctx, LQ_TYPE, want, true);
+        // otherwise / better: a 360p bridge right away (both asked at once), full quality once it proved ad-free
+        let hq = null;
+        const lqPs = curOk ? [] : LQ_TYPES.filter(function (t) { return t !== curType; }).map(function (t) {
+            return backupPlaylist(ctx, t, want, true).catch(function () { return null; });
+        });
         if (!curOk || cur.lq) {
             hq = await provenHq(ctx, want, curType);
             if (!hq) {
@@ -974,26 +981,35 @@
                 if (hq && hq.ads) hq = null;
             }
         }
-        const lq = lqP ? await lqP : null;
+        const lqs = (await Promise.all(lqPs)).filter(function (b) { return b && !b.ads; });
         const picks = [];
         if (curOk && !cur.lq) picks.push(cur);
         if (hq && hq.proven) picks.push(hq);
         if (curOk) picks.push(cur);
-        if (lq && !lq.ads) picks.push(lq);
+        lqs.forEach(function (b) { picks.push(b); });
         if (hq) picks.push(hq);
-        for (let i = 0; i < picks.length; i++) {
-            const b = picks[i];
+        function use(b, force) {
             const before = ctx.tl.source;
-            const out = serve(ctx, url, b.id, b.parsed);
-            if (!out) continue;  // nothing newer than what the player has yet
+            const out = serve(ctx, url, b.id, b.parsed, {force: force});
+            if (!out) return null;
             if (before !== b.id) {
-                report('backup', {type: b.type, res: b.res, lq: b.lq});
+                report('backup', {type: b.type, res: b.res, lq: b.lq, forced: force});
                 if (!typeOf(before)) report('replaced', {type: b.type});
             }
             b.session.trusted = true;
             setBridge(ctx, b.lq);
             unmask(ctx);
             return out;
+        }
+        for (let i = 0; i < picks.length; i++) {
+            const out = use(picks[i], false);  // null: nothing newer than what the player has yet
+            if (out) return out;
+        }
+        // ad-free but a few seconds behind: switch right away anyway - a few seconds twice beats
+        // the whole ad break in black (it used to wait up to 6 s on the hold)
+        for (let i = 0; i < picks.length; i++) {
+            const out = use(picks[i], true);
+            if (out) return out;
         }
 
         // nothing ad-free

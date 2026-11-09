@@ -75,9 +75,10 @@ Oben links **YouTube | Twitch** umschalten (GX Tube merkt sich die Wahl):
 - **Kanalseite:** Banner, Reiter **Startseite | Videos | Info** – läuft gerade ein Stream, steht er groß oben,
   darunter die vergangenen Streams (VODs). **Folgen** speichert den Kanal auf dem PC – mit Twitch angemeldet
   auch in deinem Twitch-Konto.
-- **Ohne Werbung:** Der Werbeblocker aus Adblock GX holt während einer Werbepause den Stream über eine
-  zweite, werbefreie Twitch-Sitzung (kurz in 360p, dann wieder in voller Qualität). Findet er keine,
-  zeigt er für die Dauer der Werbung ein schwarzes Bild. Werbung wird nie als „gesehen“ gemeldet.
+- **Ohne Werbung:** Der Werbeblocker aus Adblock GX überspringt Werbepausen: Der Stream läuft über eine
+  zweite, werbefreie Twitch-Sitzung weiter (sofort in 360p – zwei getrennte Sitzungen als Android- und
+  iOS-App –, dann wieder in voller Qualität). Nur wenn Twitch überall Werbung zeigt, kommt für die Dauer
+  der Werbung ein schwarzes Bild. Werbung wird nie als „gesehen“ gemeldet.
 - **Chat** rechts neben Live-Streams (mit 7TV-, BTTV- und FFZ-Emotes): startet ausgeblendet, mit **c**, dem
   Chat-Knopf oder vom Handy ein-/ausblenden.
   Mitlesen geht ohne Konto, **schreiben** mit Twitch-Anmeldung.
