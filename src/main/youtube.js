@@ -1180,6 +1180,7 @@ const xmlText = (s) =>
     .replace(/&quot;/g, '"')
     .replace(/&#39;|&apos;/g, "'")
     .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
     .replace(/&amp;/g, '&');
 
 /** Einträge eines Kanal-Feeds (YouTube-RSS). */
@@ -1249,10 +1250,11 @@ async function channelFeed(c) {
 
 /** Neueste Videos aller Abos (ohne Shorts), neueste zuerst. */
 export async function subscriptionFeed(channels, limit = 48) {
-  const list = (channels ?? []).filter((c) => CHANNEL_ID.test(c?.id ?? '')).slice(0, 100);
+  // Früher nur die ersten 100 Abos – von allen weiteren Kanälen kam nie ein neues Video
+  const list = (channels ?? []).filter((c) => CHANNEL_ID.test(c?.id ?? '')).slice(0, 500);
   const all = [];
-  for (let i = 0; i < list.length; i += 8) {
-    const batch = await Promise.all(list.slice(i, i + 8).map((c) => channelFeed(c).catch(() => [])));
+  for (let i = 0; i < list.length; i += 12) {
+    const batch = await Promise.all(list.slice(i, i + 12).map((c) => channelFeed(c).catch(() => [])));
     for (const videos of batch) all.push(...videos);
   }
   return all

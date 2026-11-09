@@ -82,3 +82,16 @@ test('Twitch-Favoriten: setzen, entfernen, auffrischen, gespeichert', () => {
   assert.deepEqual(again.twitchFavorites.map((f) => f.login), ['gronkh']);
   assert.equal(again.twitchFavorites[0].avatar, 'https://x/a.png');
 });
+
+test('Unlesbare Bibliothek wird gesichert statt überschrieben', () => {
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, 'library.json'), '{"subscriptions": [kaputt');
+  const s = new Store(dir);
+  assert.deepEqual(s.subscriptions, []);
+  const backups = fs.readdirSync(dir).filter((f) => f.startsWith('library.json.broken-'));
+  assert.equal(backups.length, 1, 'Kopie der kaputten Datei');
+  assert.equal(fs.readFileSync(path.join(dir, backups[0]), 'utf8'), '{"subscriptions": [kaputt');
+  // Speichern geht weiter, die Kopie bleibt
+  s.saveLibraryNow();
+  assert.ok(fs.existsSync(path.join(dir, backups[0])));
+});

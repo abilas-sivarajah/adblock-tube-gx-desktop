@@ -174,3 +174,10 @@ test('Fernseher-Client meldet sich wie ein Samsung-Fernseher', async () => {
   await f('https://rr1---sn.googlevideo.com/videoplayback', { body: tv });
   assert.equal(calls[2].init.body, tv);
 });
+
+test('Abo-Feed: Sonderzeichen im Titel (auch hexadezimal) werden lesbar', async () => {
+  const { parseFeed } = await import('../src/main/youtube.js');
+  const xml = '<feed><entry><yt:videoId>dQw4w9WgXcQ</yt:videoId><title>Rock &#x26; Roll &amp; mehr &#39;live&#39;</title><published>2026-01-01T00:00:00Z</published></entry></feed>';
+  const [v] = parseFeed(xml, { id: 'UCuAXFkgsw1L7xaCfnd5JJOw', name: 'Rick' });
+  assert.equal(v.title, "Rock & Roll & mehr 'live'");
+});

@@ -30,9 +30,23 @@ const MAX_HISTORY = 500;
 const MAX_RECOMMENDATIONS = 200;
 
 function readJson(file, fallback) {
+  let text;
   try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
+    text = fs.readFileSync(file, 'utf8');
   } catch {
+    return fallback; // gibt es (noch) nicht
+  }
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    // Unlesbar: sonst überschreibt das nächste Speichern sie mit leeren Daten (Abos, Verlauf … weg).
+    // Darum zur Rettung beiseitelegen
+    console.warn(`[speicher] ${path.basename(file)} ist unlesbar – Kopie wird gesichert`, err?.message ?? err);
+    try {
+      fs.copyFileSync(file, `${file}.broken-${Date.now()}`);
+    } catch {
+      // egal – dann eben ohne Kopie
+    }
     return fallback;
   }
 }
@@ -77,7 +91,12 @@ export class Store {
   }
 
   saveSettings() {
-    writeJson(this.settingsFile, this.settings);
+    try {
+      writeJson(this.settingsFile, this.settings);
+    } catch (err) {
+      // z. B. Datei kurz vom Virenscanner gesperrt – nicht das ganze Programm abstürzen lassen
+      console.warn('[speicher] Einstellungen nicht gespeichert', err?.message ?? err);
+    }
   }
 
   updateSettings(patch) {
@@ -105,7 +124,12 @@ export class Store {
 
   saveLibraryNow() {
     clearTimeout(this.libraryTimer);
-    writeJson(this.libraryFile, { history: this.history, recommendations: this.recommendations, searchHistory: this.searchHistory, subscriptions: this.subscriptions, twitchFollows: this.twitchFollows, twitchFavorites: this.twitchFavorites });
+    try {
+      writeJson(this.libraryFile, { history: this.history, recommendations: this.recommendations, searchHistory: this.searchHistory, subscriptions: this.subscriptions, twitchFollows: this.twitchFollows, twitchFavorites: this.twitchFavorites });
+    } catch (err) {
+      // Läuft aus einem Timer: eine Ausnahme hier brächte Electrons Absturz-Dialog. Beim nächsten Mal klappt es
+      console.warn('[speicher] Bibliothek nicht gespeichert', err?.message ?? err);
+    }
   }
 
   historyEntry(id) {

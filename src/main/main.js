@@ -423,7 +423,10 @@ async function ensureTwitchToken() {
   if (!TwitchAccount.loggedIn() || !TwitchAccount.needsRefresh()) return;
   twitchRefreshing ??= TW.refreshTokens(TwitchAccount.currentTokens())
     .then((t) => TwitchAccount.updateTokens(t))
-    .catch(() => twitchExpired())
+    // Kein Netz o. Ä. ist kein Grund, die Anmeldung wegzuwerfen – nur eine Ablehnung von Twitch
+    .catch((err) => {
+      if (err?.signIn) twitchExpired();
+    })
     .finally(() => {
       twitchRefreshing = null;
     });

@@ -543,6 +543,7 @@ function renderSubButtons() {
 }
 
 let subsFeedAt = 0;
+let subsFeedFor = ''; // für welche Abos der Feed geladen wurde
 
 /** Startseite: "Neu von deinen Abos" mit den Kanälen und ihren neuesten Videos. */
 async function renderSubsShelf() {
@@ -563,12 +564,14 @@ async function renderSubsShelf() {
     }),
   );
   const grid = $('subsGrid');
-  // Nicht bei jedem Wechsel auf die Startseite neu laden
-  if (grid.childElementCount && Date.now() - subsFeedAt < 5 * 60 * 1000) return;
+  // Nicht bei jedem Wechsel auf die Startseite neu laden – außer die Abos haben sich geändert
+  const subsKey = state.subs.map((s) => s.id).sort().join(',');
+  if (grid.childElementCount && Date.now() - subsFeedAt < 5 * 60 * 1000 && subsKey === subsFeedFor) return;
   if (!grid.childElementCount) $('subsHint').textContent = 'Lädt …';
   try {
     const videos = await gx.subscriptionFeed();
     subsFeedAt = Date.now();
+    subsFeedFor = subsKey;
     grid.replaceChildren(...videos.slice(0, 12).map((v) => videoCard(v)));
     $('subsHint').textContent = videos.length ? '' : 'Noch keine neuen Videos';
   } catch {

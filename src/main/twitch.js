@@ -583,7 +583,10 @@ export function tokensFrom(json, clientId) {
 export async function refreshTokens(tokens) {
   if (!tokens?.refresh_token) throw new TwitchError('Twitch-Anmeldung abgelaufen', { code: 401, signIn: true });
   const r = await postForm('https://id.twitch.tv/oauth2/token', { client_id: tokens.client_id ?? TV_CLIENT, grant_type: 'refresh_token', refresh_token: tokens.refresh_token });
-  if (!r.ok || !r.json.access_token) throw new TwitchError('Twitch-Anmeldung abgelaufen', { code: 401, signIn: true });
+  // Nur eine Ablehnung (4xx) heißt "abgelaufen" – Server- und Netzfehler sind vorübergehend
+  if (r.status >= 400 && r.status < 500) throw new TwitchError('Twitch-Anmeldung abgelaufen', { code: 401, signIn: true });
+  if (!r.ok) throw new TwitchError(`Twitch ist gerade nicht erreichbar (HTTP ${r.status})`);
+  if (!r.json.access_token) throw new TwitchError('Twitch-Anmeldung abgelaufen', { code: 401, signIn: true });
   return tokensFrom({ ...r.json, refresh_token: r.json.refresh_token ?? tokens.refresh_token }, tokens.client_id ?? TV_CLIENT);
 }
 
