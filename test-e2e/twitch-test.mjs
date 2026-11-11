@@ -103,7 +103,38 @@ try {
   console.log('[kategorie]', await win.locator('#twCategoryHead h1').textContent(), inCat, '→', await win.locator('#twCategoryGrid .tw-card').count(), 'Streams');
   await shot(win, 'twitch-category.png');
 
-  // ---- Suche
+  // ---- Vorschläge beim Tippen: Kanäle mit Bild, Kategorien mit Cover, Suchbegriffe
+  await win.click('#searchInput');
+  await win.keyboard.type('montanabl', { delay: 40 });
+  await win.waitForSelector('#suggestions:not([hidden]) li .sug-avatar', { timeout: 20_000 });
+  const sugg = await win.locator('#suggestions li').allTextContents();
+  console.log('[vorschläge]', sugg.join(' | '));
+  assert.ok(sugg.some((t) => /MontanaBlack88/i.test(t)), 'Kanal fehlt in den Vorschlägen');
+  await shot(win, 'twitch-suggestions.png');
+  // Kategorie mit den Pfeiltasten wählen, Enter öffnet sie direkt
+  await win.fill('#searchInput', '');
+  await win.keyboard.type('just chatt', { delay: 40 });
+  await win.waitForSelector('#suggestions:not([hidden]) li .sug-boxart', { state: 'attached', timeout: 20_000 });
+  const catIndex = await win.evaluate(() => [...document.querySelectorAll('#suggestions li')].findIndex((li) => li.querySelector('.sug-boxart')));
+  for (let i = 0; i <= catIndex; i++) await win.keyboard.press('ArrowDown');
+  assert.equal(await win.inputValue('#searchInput'), 'Just Chatting');
+  await win.keyboard.press('Enter');
+  await win.waitForSelector('#view-twcategory.active #twCategoryGrid .tw-card', { timeout: 30_000 });
+  console.log('[vorschlag → kategorie]', await win.locator('#twCategoryHead h1').textContent());
+
+  // ---- Suche: Kanäle, Kategorien, Live-Kanäle mit Tag, vergangene Videos
+  await win.fill('#searchInput', 'deutsch');
+  await win.press('#searchInput', 'Enter');
+  await win.waitForSelector('#view-twsearch.active #twSearchLive .tw-card', { timeout: 30_000 });
+  const shownChannels = await win.locator('#twSearchChannels .tw-channel-row').count();
+  console.log('[suche deutsch]', await win.locator('#twSearchLiveHead h2').textContent(), '|', await win.locator('#twSearchLive .tw-card').count(), 'live,', await win.locator('#twSearchVideos .tw-card').count(), 'VODs,', shownChannels, 'Kanäle');
+  await win.locator('#twSearchChannelsMore button').click();
+  await win.waitForFunction((n) => document.querySelectorAll('#twSearchChannels .tw-channel-row').length > n, shownChannels, { timeout: 20_000 });
+  await win.locator('#twSearchChannelsMore button').click();
+  await win.waitForFunction(() => document.querySelectorAll('#twSearchChannels .tw-channel-row').length > 15, null, { timeout: 20_000 });
+  console.log('[suche deutsch] mehr Kanäle:', await win.locator('#twSearchChannels .tw-channel-row').count());
+  await shot(win, 'twitch-search-tags.png');
+
   await win.fill('#searchInput', 'montanablack88');
   await win.press('#searchInput', 'Enter');
   await win.waitForSelector('#view-twsearch.active #twSearchChannels .tw-channel-row', { timeout: 30_000 });

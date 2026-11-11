@@ -55,7 +55,18 @@ svg.i { width: 24px; height: 24px; fill: currentColor; display: block; }
 }
 #suggestions li { padding: 6px 20px; cursor: pointer; display: flex; gap: 12px; align-items: center; font-size: 16px; }
 #suggestions li.active, #suggestions li:hover { background: var(--bg-hover); }
-#suggestions li svg { width: 18px; height: 18px; fill: var(--text-2); }
+#suggestions li svg { width: 18px; height: 18px; fill: var(--text-2); flex: none; }
+#suggestions .sug-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#suggestions .sug-text b { font-weight: 700; }
+/* Twitch: Kanäle mit Bild, Kategorien mit Cover */
+#suggestions .sug-avatar { flex: none; width: 26px; height: 26px; margin: 0 -4px; border-radius: 50%; background: #333; }
+#suggestions .sug-avatar.live { outline: 2px solid #eb0400; outline-offset: 1px; }
+#suggestions .sug-avatar img { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; display: block; }
+#suggestions img.broken { visibility: hidden; }
+#suggestions .sug-boxart { flex: none; width: 20px; height: 27px; margin: 0 -1px; border-radius: 3px; object-fit: cover; background: #333; }
+#suggestions li svg.sug-verified { width: 16px; height: 16px; margin-left: -6px; fill: var(--twitch-2); }
+#suggestions .sug-meta { flex: none; margin-left: auto; padding-left: 12px; display: flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 13px; }
+#suggestions .sug-meta.live::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #eb0400; }
 .top-actions { display: flex; gap: 4px; }
 .icon-btn { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; position: relative; flex: none; }
 .icon-btn:hover { background: rgba(255,255,255,.1); }

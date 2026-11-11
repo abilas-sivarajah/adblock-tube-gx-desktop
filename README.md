@@ -71,7 +71,11 @@ Oben links **YouTube | Twitch** umschalten (GX Tube merkt sich die Wahl):
 - **Favoriten:** Mit dem Stern (auf jeder Stream-Karte, im Menü und auf der Kanalseite) markierst du Kanäle
   als Favoriten – auch solche, denen du nicht folgst. Sie stehen ganz oben in der Seitenleiste, als eigene Reihe
   auf der Startseite und unter *Folge ich → Favoriten*. Favoriten bleiben nur auf diesem PC.
-- **Durchsuchen:** die meistgeschauten Kategorien und Live-Kanäle. Suche nach Kanälen und Kategorien.
+- **Durchsuchen:** die meistgeschauten Kategorien und Live-Kanäle.
+- **Suche wie auf twitch.tv:** Schon beim Tippen erscheinen **Vorschläge** – Kanäle mit Bild (live mit Spiel und
+  Zuschauern, ein Klick startet den Stream), Kategorien und Suchbegriffe, dazu passende frühere Suchen; mit den
+  Pfeiltasten wählen, Enter öffnet direkt. Die Ergebnisse zeigen Kategorien, Kanäle (mit „Mehr anzeigen“),
+  **Live-Kanäle mit passendem Tag** (z. B. „deutsch“ oder „speedrun“) und **vergangene Videos**.
 - **Kanalseite:** Banner, Reiter **Startseite | Videos | Info** – läuft gerade ein Stream, steht er groß oben,
   darunter die vergangenen Streams (VODs). **Folgen** speichert den Kanal auf dem PC – mit Twitch angemeldet
   auch in deinem Twitch-Konto.

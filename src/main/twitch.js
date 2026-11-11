@@ -273,24 +273,105 @@ export async function category(name, { language = '', cursor = null } = {}) {
   return { game: toGame(data.game), items: edges(data.game.streams).map((e) => toStream(e.node)).filter(Boolean), next: null };
 }
 
-/** Suche nach Kanälen und Kategorien. Laufende Streams zuerst. */
-export async function search(query) {
-  const data = await gql(
-    `query($q: String!) { searchFor(userQuery: $q, platform: "web", options: {targets: [{index: CHANNEL}]}) {
-      channels { items { ${USER_FIELDS} followers { totalCount } stream { ${STREAM_FIELDS} } } } }
-      searchCategories(query: $q, first: 12) { edges { node { ${GAME_FIELDS} } } } }`,
-    { q: String(query).slice(0, 200) },
-  );
-  const channels = (data.searchFor?.channels?.items ?? []).map(toChannel).filter(Boolean);
-  // Genau der gesuchte Kanal zuerst, dann wer live ist (nach Zuschauern), dann der Rest
+const SEARCH_CHANNELS = `channels { cursor items { ${USER_FIELDS} followers { totalCount } stream { ${STREAM_FIELDS} } } }`;
+
+/** Kanäle einer Suchseite: genau der gesuchte zuerst, dann wer live ist (nach Zuschauern), dann der Rest. */
+export function sortChannels(items, query) {
+  const channels = (Array.isArray(items) ? items : []).map(toChannel).filter(Boolean);
   const wanted = String(query).trim().toLowerCase().replace(/^@/, '');
   const exact = channels.filter((c) => c.login === wanted || c.name.toLowerCase() === wanted);
   const rest = channels.filter((c) => !exact.includes(c));
   const live = rest.filter((c) => c.live).sort((a, b) => b.live.viewers - a.live.viewers);
+  return [...exact, ...live, ...rest.filter((c) => !c.live)];
+}
+
+/**
+ * Suche wie auf twitch.tv: Kanäle (mit Weiterblättern), Kategorien, Live-Kanäle mit passendem Tag
+ * ("deutsch", "speedrun" …) und vergangene Videos. Alles in einer Abfrage.
+ */
+export async function search(query) {
+  const q = String(query).slice(0, 200);
+  const data = await gql(
+    `query($q: String!) {
+      channels: searchFor(userQuery: $q, platform: "web", options: {targets: [{index: CHANNEL}]}) { ${SEARCH_CHANNELS} }
+      more: searchFor(userQuery: $q, platform: "web") {
+        channelsWithTag { items { ${USER_FIELDS} stream { ${STREAM_FIELDS} } } }
+        videos { items { ${VIDEO_FIELDS} owner { ${USER_FIELDS} } } } }
+      searchCategories(query: $q, first: 12) { edges { node { ${GAME_FIELDS} } } } }`,
+    { q },
+  );
+  const seen = new Set();
+  const live = (data.more?.channelsWithTag?.items ?? [])
+    .map((u) => (u?.stream ? toStream(u.stream, u) : null))
+    .filter((v) => v && !seen.has(v.id) && seen.add(v.id))
+    .sort((a, b) => b.viewers - a.viewers)
+    .slice(0, 60);
   return {
-    channels: [...exact, ...live, ...rest.filter((c) => !c.live)],
+    channels: sortChannels(data.channels?.channels?.items, q),
+    next: data.channels?.channels?.cursor || null,
     games: edges(data.searchCategories).map((e) => toGame(e.node)).filter(Boolean),
+    live,
+    videos: (data.more?.videos?.items ?? []).map((v) => toVod(v)).filter(Boolean),
   };
+}
+
+/** Weitere Kanäle zur Suche ([cursor] aus search() bzw. dem letzten Aufruf). */
+export async function searchChannels(query, cursor) {
+  const q = String(query).slice(0, 200);
+  const data = await gql(
+    `query($q: String!, $after: String) { searchFor(userQuery: $q, platform: "web", options: {targets: [{index: CHANNEL, cursor: $after}]}) { ${SEARCH_CHANNELS} } }`,
+    { q, after: String(cursor).slice(0, 100) },
+  );
+  return { items: sortChannels(data.searchFor?.channels?.items, q), next: data.searchFor?.channels?.cursor || null };
+}
+
+/** Vorschläge beim Tippen (wie im Suchfeld auf twitch.tv). */
+export async function suggestions(query) {
+  const q = String(query ?? '').trim().slice(0, 100);
+  if (!q) return [];
+  const data = await gql(
+    `query($q: String!) { searchSuggestions(queryFragment: $q, withOfflineChannelContent: true) { edges { node { text
+      content { __typename
+        ... on SearchSuggestionChannel { isLive isVerified login profileImageURL(width: 50) user { ${USER_FIELDS} stream { ${STREAM_FIELDS} } } }
+        ... on SearchSuggestionCategory { game { ${GAME_FIELDS} } } }
+      matchingCharacters { start end } } } } }`,
+    { q },
+  );
+  return toSuggestions(data.searchSuggestions);
+}
+
+/**
+ * Vorschläge für die Oberfläche: { type: 'channel' | 'category' | 'query', text, match: [start, end] | null, … }.
+ * Kanal: login, name, avatar, verified, live (Stream wie toStream oder null). Kategorie: game (wie toGame).
+ */
+export function toSuggestions(conn) {
+  const out = [];
+  const seen = new Set();
+  for (const e of edges(conn)) {
+    const n = e?.node;
+    const text = String(n?.text ?? '').trim();
+    if (!text) continue;
+    const m = n.matchingCharacters;
+    const match = m && Number.isInteger(m.start) && Number.isInteger(m.end) && m.start >= 0 && m.end > m.start && m.end <= text.length ? [m.start, m.end] : null;
+    const c = n.content;
+    let s;
+    if (c?.__typename === 'SearchSuggestionChannel') {
+      const login = String(c.login ?? c.user?.login ?? '').toLowerCase();
+      if (!LOGIN.test(login)) continue;
+      const live = c.user?.stream ? toStream(c.user.stream, { ...c.user, login }) : null;
+      s = { type: 'channel', key: `c:${login}`, text, match, login, userId: c.user?.id ?? null, name: c.user?.displayName || text, avatar: c.user?.profileImageURL ?? c.profileImageURL ?? null, verified: c.isVerified === true, live };
+    } else if (c?.__typename === 'SearchSuggestionCategory') {
+      const game = toGame(c.game);
+      if (!game) continue;
+      s = { type: 'category', key: `g:${game.name.toLowerCase()}`, text, match, game };
+    } else {
+      s = { type: 'query', key: `q:${text.toLowerCase()}`, text, match };
+    }
+    if (seen.has(s.key)) continue;
+    seen.add(s.key);
+    out.push(s);
+  }
+  return out;
 }
 
 const CHANNEL_QUERY = `query($login: String!, $after: Cursor) { user(login: $login) {

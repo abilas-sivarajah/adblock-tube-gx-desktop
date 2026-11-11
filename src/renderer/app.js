@@ -312,23 +312,32 @@ function bindTopbar() {
   let suggestTimer = null;
   let suggestSeq = 0;
   let active = -1;
+  let recent = []; // Suchverlauf, beim Fokussieren aufgefrischt
   input.addEventListener('input', () => {
     clearTimeout(suggestTimer);
     active = -1;
     const q = input.value;
     const seq = ++suggestSeq;
     suggestTimer = setTimeout(async () => {
-      const list = q.trim() && state.platform === 'youtube' ? await gx.suggestions(q) : [];
+      let entries = [];
+      if (q.trim() && state.platform === 'twitch') {
+        // Wie auf twitch.tv: passende frühere Suchen, dann Kanäle, Kategorien und Suchbegriffe
+        const needle = q.trim().toLowerCase();
+        const mine = recent.filter((h) => h.toLowerCase().includes(needle)).slice(0, 3);
+        const remote = await Twitch.suggestions(q).catch(() => []);
+        entries = [...textEntries(mine, true), ...remote.filter((s) => s.run || !mine.some((h) => h.toLowerCase() === s.q.toLowerCase()))];
+      } else if (q.trim()) {
+        entries = textEntries(await gx.suggestions(q));
+      }
       // Inzwischen gesucht oder weitergetippt? Dann nicht mehr anzeigen.
       if (seq !== suggestSeq || input.value !== q || document.activeElement !== input) return;
-      renderSuggestions(list);
+      showSuggestions(entries);
     }, 150);
   });
   input.addEventListener('focus', async () => {
-    if (!input.value.trim()) {
-      const lib = await gx.library();
-      renderSuggestions(lib.searchHistory.slice(0, 10), true);
-    }
+    const lib = await gx.library();
+    recent = lib.searchHistory;
+    if (!input.value.trim() && document.activeElement === input) showSuggestions(textEntries(recent.slice(0, 10), true));
   });
   input.addEventListener('keydown', (e) => {
     const items = [...$('suggestions').querySelectorAll('li')];
@@ -349,9 +358,13 @@ function bindTopbar() {
     if (!q) return;
     clearTimeout(suggestTimer);
     suggestSeq++;
+    // Mit den Pfeiltasten einen Kanal oder eine Kategorie gewählt? Dann direkt dorthin.
+    const picked = $('suggestions').hidden || active < 0 ? null : $('suggestions').querySelectorAll('li')[active];
+    const run = picked && suggestionActions.get(picked);
     $('suggestions').hidden = true;
     input.blur();
-    runSearch(q);
+    if (run) run();
+    else runSearch(q);
   });
   $('view-search').addEventListener('scroll', (e) => {
     const v = e.currentTarget;
@@ -367,22 +380,37 @@ function bindTopbar() {
   });
 }
 
-function renderSuggestions(list, history = false) {
+/** Einfache Vorschläge (Text, Suchverlauf) für showSuggestions(). */
+function textEntries(list, history = false) {
+  return list.map((q) => ({ q, content: [icon(history ? 'history' : 'search'), el('span', 'sug-text', q)] }));
+}
+
+// Vorschlag → eigene Aktion (Twitch: Kanal oder Kategorie öffnen); ohne Eintrag wird gesucht
+const suggestionActions = new WeakMap();
+
+/** Liste unter dem Suchfeld. entries: { q, content: Node[], run? } – [q] landet beim Durchblättern im Feld. */
+function showSuggestions(entries) {
   const ul = $('suggestions');
   ul.replaceChildren();
-  for (const q of list) {
+  for (const s of entries) {
     const li = el('li');
-    li.dataset.q = q;
-    li.append(icon(history ? 'history' : 'search'), el('span', null, q));
+    li.dataset.q = s.q;
+    li.append(...s.content);
+    if (s.run) suggestionActions.set(li, s.run);
     li.addEventListener('mousedown', (e) => {
       e.preventDefault();
-      $('searchInput').value = q;
       ul.hidden = true;
-      runSearch(q);
+      if (s.run) {
+        $('searchInput').blur();
+        s.run();
+        return;
+      }
+      $('searchInput').value = s.q;
+      runSearch(s.q);
     });
     ul.append(li);
   }
-  ul.hidden = list.length === 0;
+  ul.hidden = entries.length === 0;
 }
 
 // Suchfilter wie auf youtube.com (der erste Wert ist jeweils "egal")

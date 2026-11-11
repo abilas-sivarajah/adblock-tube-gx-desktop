@@ -1097,6 +1097,8 @@ function setupIpc() {
     store.addSearch(q);
     return TW.search(String(q).slice(0, 200));
   });
+  ipcMain.handle('tw:searchChannels', (_e, q, cursor) => TW.searchChannels(String(q), String(cursor)));
+  ipcMain.handle('tw:suggestions', (_e, q) => TW.suggestions(String(q).slice(0, 100)).catch(() => []));
   ipcMain.handle('tw:channel', (_e, login) => TW.channel(String(login)));
   ipcMain.handle('tw:channelMore', (_e, login, cursor) => TW.channelMore(String(login), String(cursor)));
   ipcMain.handle('tw:follows', () => store.twitchFollows);

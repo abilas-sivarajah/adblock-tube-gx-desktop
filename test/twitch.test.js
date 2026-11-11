@@ -45,6 +45,74 @@ test('Stream, VOD, Kategorie und Kanal aus GraphQL', () => {
   assert.equal(c.live.id, 'twitch:papaplatte');
 });
 
+test('Suchvorschläge: Kanäle, Kategorien und Suchbegriffe', () => {
+  const list = TW.toSuggestions({
+    edges: [
+      { node: { text: 'xRohat', matchingCharacters: { start: 0, end: 1 }, content: { __typename: 'SearchSuggestionChannel', isLive: true, isVerified: true, login: 'xrohat', profileImageURL: 'https://x/50.png', user: { id: '430023505', login: 'xrohat', displayName: 'xRohat', profileImageURL: 'https://x/70.png', stream: { title: 'Charity', viewersCount: 2208, game: { name: 'Fortnite', displayName: 'Fortnite' } } } } } },
+      { node: { text: 'MontanaBlack88', matchingCharacters: { start: 0, end: 0 }, content: { __typename: 'SearchSuggestionChannel', isLive: false, isVerified: false, login: 'montanablack88', profileImageURL: 'https://x/m.png', user: { id: '1', login: 'montanablack88', displayName: 'MontanaBlack88', stream: null } } } },
+      { node: { text: 'Minecraft', matchingCharacters: { start: 0, end: 4 }, content: { __typename: 'SearchSuggestionCategory', game: { id: '27471', name: 'Minecraft', displayName: 'Minecraft', viewersCount: 13642, boxArtURL: 'https://b' } } } },
+      { node: { text: 'minecraft cape', matchingCharacters: { start: 0, end: 99 }, content: null } },
+      // Doppelt, leer oder kaputt: weg
+      { node: { text: 'Minecraft Cape', content: null } },
+      { node: { text: '  ', content: null } },
+      { node: { text: 'Kaputt', content: { __typename: 'SearchSuggestionChannel', login: 'nicht gültig!' } } },
+      { node: { text: 'Ohne Spiel', content: { __typename: 'SearchSuggestionCategory', game: null } } },
+      null,
+    ],
+  });
+  assert.deepEqual(list.map((s) => [s.type, s.text]), [['channel', 'xRohat'], ['channel', 'MontanaBlack88'], ['category', 'Minecraft'], ['query', 'minecraft cape']]);
+  const [live, offline, cat, query] = list;
+  assert.deepEqual(live.match, [0, 1]);
+  assert.equal(live.verified, true);
+  assert.equal(live.avatar, 'https://x/70.png');
+  assert.equal(live.live.id, 'twitch:xrohat');
+  assert.equal(live.live.viewers, 2208);
+  assert.equal(live.live.channelName, 'xRohat');
+  assert.equal(offline.live, null);
+  assert.equal(offline.match, null, 'Leere Stelle → nichts hervorheben');
+  assert.equal(cat.game.name, 'Minecraft');
+  assert.equal(cat.game.viewers, 13642);
+  assert.equal(query.match, null, 'Stelle außerhalb des Texts → nichts hervorheben');
+  assert.deepEqual(TW.toSuggestions(null), []);
+});
+
+test('Suche: Kanäle, Kategorien, Live mit Tag, VODs und weitere Kanäle', async () => {
+  const bodies = [];
+  const user = (login, stream = null) => ({ id: login, login, displayName: login, profileImageURL: null, followers: { totalCount: 1 }, stream });
+  TW.configure({
+    fetch: async (url, init) => {
+      const body = JSON.parse(init.body);
+      bodies.push(body);
+      const data = body.variables.after
+        ? { searchFor: { channels: { cursor: '', items: [user('papaplatte_73'), user('trymacs')] } } }
+        : {
+            channels: { channels: { cursor: 'MTU=', items: [user('papaplatte_afk'), user('fan', { viewersCount: 5 }), user('papaplatte'), user('big', { viewersCount: 900 })] } },
+            more: {
+              channelsWithTag: { items: [user('a', { viewersCount: 10, freeformTags: [{ name: 'Deutsch' }] }), user('b', { viewersCount: 99 }), user('offline'), user('a', { viewersCount: 10 })] },
+              videos: { items: [{ id: '42', title: 'VOD', lengthSeconds: 60, owner: { login: 'papaplatte', displayName: 'Papaplatte' } }, { id: 'kaputt' }] },
+            },
+            searchCategories: { edges: [{ node: { name: 'Just Chatting', displayName: 'Just Chatting' } }] },
+          };
+      return new Response(JSON.stringify({ data }), { status: 200 });
+    },
+  });
+  const r = await TW.search('Papaplatte');
+  assert.equal(bodies[0].variables.q, 'Papaplatte');
+  // Genau der gesuchte zuerst, dann live nach Zuschauern, dann offline in Twitchs Reihenfolge
+  assert.deepEqual(r.channels.map((c) => c.login), ['papaplatte', 'big', 'fan', 'papaplatte_afk']);
+  assert.equal(r.next, 'MTU=');
+  assert.deepEqual(r.games.map((g) => g.name), ['Just Chatting']);
+  assert.deepEqual(r.live.map((v) => [v.id, v.viewers]), [['twitch:b', 99], ['twitch:a', 10]]);
+  assert.deepEqual(r.live[1].tags, ['Deutsch']);
+  assert.deepEqual(r.videos.map((v) => [v.id, v.channelLogin]), [['twitch-vod:42', 'papaplatte']]);
+
+  const more = await TW.searchChannels('trymacs', 'MTU=');
+  assert.equal(bodies[1].variables.after, 'MTU=');
+  assert.deepEqual(more.items.map((c) => c.login), ['trymacs', 'papaplatte_73']);
+  assert.equal(more.next, null, 'Leerer Cursor → Ende');
+  TW.configure({ fetch: (...a) => fetch(...a) });
+});
+
 test('Wiedergabe-Adresse (usher)', () => {
   const live = new URL(TW.usherUrl({ login: 'trymacs', token: { value: '{"a":1}', signature: 'abc' } }));
   assert.equal(live.origin + live.pathname, 'https://usher.ttvnw.net/api/channel/hls/trymacs.m3u8');

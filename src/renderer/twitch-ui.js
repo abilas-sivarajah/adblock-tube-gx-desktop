@@ -20,7 +20,7 @@ const tw = {
   category: null, // { name, items, shown, loading }
   channel: null, // { login, data, next, loading, tab }
   browse: { tab: 'categories', games: null, streams: null, language: null, shown: 0 },
-  search: { query: '', seq: 0 },
+  search: { query: '', seq: 0, channels: [], shown: 0, next: null, loading: false }, // Kanäle: geladen, gezeigt, nächste Seite
   prevView: 'twhome',
 };
 
@@ -927,28 +927,148 @@ function moreBrowse(n = STEP) {
 
 // ------------------------------------------------------------------ Suche
 
+const SEARCH_SECTIONS = ['Games', 'Channels', 'Live', 'Videos'];
+
 export async function search(q) {
   if (ctx.state.watch === 'full') ctx.setWatch('mini');
   openView('twsearch');
-  const seq = ++tw.search.seq;
-  tw.search.query = q;
-  $('twSearchGames').replaceChildren();
-  $('twSearchChannels').replaceChildren();
-  $('twSearchGamesHead').hidden = true;
-  $('twSearchChannelsHead').hidden = true;
+  const s = tw.search;
+  const seq = ++s.seq;
+  Object.assign(s, { query: q, channels: [], shown: 0, next: null, loading: false });
+  for (const name of SEARCH_SECTIONS) {
+    $(`twSearch${name}`).replaceChildren();
+    $(`twSearch${name}Head`).hidden = true;
+  }
+  for (const name of SEARCH_SECTIONS) $(`twSearch${name}More`).hidden = true;
   $('twSearchStatus').textContent = 'Suche läuft …';
   $('view-twsearch').scrollTop = 0;
   try {
     const res = await gx.twitchSearch(q);
-    if (seq !== tw.search.seq) return;
+    if (seq !== s.seq) return;
+    // Kategorien in einer Reihe, damit Kanäle und Streams nicht weit nach unten rutschen
+    const games = $('twSearchGames');
+    games.classList.add('tw-games-one-row');
+    games.replaceChildren(...res.games.map(gameCard));
     $('twSearchGamesHead').hidden = res.games.length === 0;
-    $('twSearchGames').replaceChildren(...res.games.map(gameCard));
+    if (res.games.length > getComputedStyle(games).gridTemplateColumns.split(' ').length) {
+      moreDivider($('twSearchGamesMore'), 'Alle Kategorien', () => {
+        games.classList.remove('tw-games-one-row');
+        $('twSearchGamesMore').hidden = true;
+      });
+    }
+    // Kanäle: erst die wichtigsten, der Rest (auch weitere Seiten von Twitch) über "Mehr anzeigen"
+    s.channels = res.channels;
+    s.next = res.next;
     $('twSearchChannelsHead').hidden = res.channels.length === 0;
-    $('twSearchChannels').replaceChildren(...res.channels.map(channelRow));
-    $('twSearchStatus').textContent = res.channels.length || res.games.length ? '' : 'Keine Ergebnisse';
+    moreSearchChannels(6);
+    // Live-Kanäle, deren Tag zur Suche passt ("deutsch", "speedrun" …)
+    const tag = matchingTag(res.live, q);
+    $('twSearchLiveHead').replaceChildren(el('h2', null, tag ? `Live mit dem Tag „${tag}“` : `Live-Kanäle zu „${q}“`));
+    $('twSearchLiveHead').hidden = res.live.length === 0;
+    reveal($('twSearchLive'), $('twSearchLiveMore'), res.live, 12, (v) => streamCard(v));
+    $('twSearchVideosHead').hidden = res.videos.length === 0;
+    reveal($('twSearchVideos'), $('twSearchVideosMore'), res.videos, 12, (v) => streamCard(v));
+    const any = res.channels.length || res.games.length || res.live.length || res.videos.length;
+    $('twSearchStatus').textContent = any ? '' : 'Keine Ergebnisse';
   } catch (err) {
-    if (seq === tw.search.seq) $('twSearchStatus').textContent = 'Suche fehlgeschlagen: ' + ctx.cleanError(err);
+    if (seq === s.seq) $('twSearchStatus').textContent = 'Suche fehlgeschlagen: ' + ctx.cleanError(err);
   }
+}
+
+/** Den Tag, über den Twitch die Live-Kanäle gefunden hat (für die Überschrift) – oder null. */
+function matchingTag(streams, q) {
+  const want = q.trim().toLowerCase().replace(/\s+/g, '');
+  for (const v of streams) {
+    const t = v.tags?.find((x) => x.toLowerCase() === want);
+    if (t) return t;
+  }
+  return null;
+}
+
+/** Liste nach und nach zeigen, darunter "Mehr anzeigen", solange noch etwas fehlt. */
+function reveal(box, moreBox, items, first, render) {
+  let shown = 0;
+  const step = (n) => {
+    const next = items.slice(shown, shown + n);
+    shown += next.length;
+    box.append(...next.map(render));
+    if (shown < items.length) moreDivider(moreBox, 'Mehr anzeigen', () => step(STEP));
+    else moreBox.hidden = true;
+  };
+  box.replaceChildren();
+  step(first);
+}
+
+/** Weitere Kanäle zeigen – sind alle geladenen zu sehen, die nächste Seite von Twitch holen. */
+async function moreSearchChannels(n = 15) {
+  const s = tw.search;
+  const seq = s.seq;
+  const more = $('twSearchChannelsMore');
+  if (s.shown >= s.channels.length && s.next) {
+    if (s.loading) return;
+    s.loading = true;
+    more.querySelector('button')?.setAttribute('disabled', '');
+    try {
+      const page = await gx.twitchSearchChannels(s.query, s.next);
+      if (seq !== s.seq) return;
+      const have = new Set(s.channels.map((c) => c.login));
+      s.channels.push(...page.items.filter((c) => !have.has(c.login)));
+      s.next = page.items.length ? page.next : null;
+    } catch (err) {
+      if (seq === s.seq) ctx.toast('Weitere Kanäle konnten nicht geladen werden: ' + ctx.cleanError(err));
+    } finally {
+      if (seq === s.seq) s.loading = false;
+      more.querySelector('button')?.removeAttribute('disabled');
+    }
+  }
+  const next = s.channels.slice(s.shown, s.shown + n);
+  s.shown += next.length;
+  $('twSearchChannels').append(...next.map(channelRow));
+  if (s.shown < s.channels.length || s.next) moreDivider(more, 'Mehr anzeigen', () => moreSearchChannels());
+  else more.hidden = true;
+}
+
+/**
+ * Vorschläge fürs Suchfeld (zeigt app.js an): Kanäle (live → gleich abspielen, sonst Kanalseite),
+ * Kategorien und Suchbegriffe – wie auf twitch.tv.
+ */
+export async function suggestions(q) {
+  const list = await gx.twitchSuggestions(q);
+  return list.map((s) => {
+    if (s.type === 'channel') {
+      const av = el('span', 'sug-avatar' + (s.live ? ' live' : ''));
+      const img = el('img');
+      img.alt = '';
+      img.addEventListener('error', () => img.classList.add('broken'), { once: true });
+      img.src = s.avatar || '';
+      av.append(img);
+      const content = [av, matchText(s.text, s.match)];
+      if (s.verified) {
+        const check = icon('verified');
+        check.classList.add('sug-verified');
+        check.setAttribute('aria-label', 'Verifiziert');
+        content.push(check);
+      }
+      if (s.live) content.push(el('span', 'sug-meta live', [s.live.game?.displayName, shortCount(s.live.viewers)].filter(Boolean).join(' · ')));
+      return { q: s.name, content, run: () => (s.live ? play(s.live) : openChannel(s.login, s.name)) };
+    }
+    if (s.type === 'category') {
+      const art = el('img', 'sug-boxart');
+      art.alt = '';
+      art.addEventListener('error', () => art.classList.add('broken'), { once: true });
+      art.src = s.game.boxArt || '';
+      return { q: s.game.displayName, content: [art, matchText(s.text, s.match), el('span', 'sug-meta', 'Kategorie')], run: () => openCategory(s.game.name) };
+    }
+    return { q: s.text, content: [icon('search'), matchText(s.text, s.match)] };
+  });
+}
+
+/** Text mit dem getippten Teil fett (Twitch liefert die Stelle mit). */
+function matchText(text, match) {
+  const span = el('span', 'sug-text');
+  if (!match) span.textContent = text;
+  else span.append(text.slice(0, match[0]), el('b', null, text.slice(match[0], match[1])), text.slice(match[1]));
+  return span;
 }
 
 // ------------------------------------------------------------------ Kategorie
