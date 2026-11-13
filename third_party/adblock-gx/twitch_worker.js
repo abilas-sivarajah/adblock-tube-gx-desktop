@@ -53,7 +53,10 @@
         forbidden: 300000,    // ... when Twitch refuses the player type / codec does not match
         stalled: 10000,       // ... when the page reports the video stuck on it
         hqDwell: 8000,        // on the 360p bridge at least this long before searching full quality
-        nativeClean: 3        // own session ad-free for this many new playlists -> back to it
+        nativeClean: 3,       // own session ad-free for this many new playlists -> back to it
+        nativeTail: 2,        // ... or this many live segments behind the ad, while the ad is still in the window
+        bridgeWait: 2500,     // longest a player request waits for the 360p bridges (the first ad-free one wins)
+        spoofWait: 1500       // longest a player request waits for the ad-spoofing report
     }, INIT.timing || {});
     const AD_TEXT = /stitched-ad|X-TV-TWITCH-AD|\/adsquared\/|SCTE35-OUT|EXT-X-CUE-OUT|CLASS="twitch-(?:stitched-)?ad(?:-|")|"MIDROLL"/i;
     let adSpoofing = INIT.adSpoofing !== false;  // primär aktiv (Ad-Spoofing zuerst, Ersatz-Sitzung als Fallback)
@@ -119,6 +122,33 @@
 
     function within(promise, ms) {
         return Promise.race([promise, sleep(ms).then(function () { return null; })]);
+    }
+
+    // The results that are in once the first good one arrives (or all are done, or `ms` have passed).
+    // A slow request does not hold up the others; it finishes in the background.
+    function firstGood(promises, good, ms) {
+        return new Promise(function (resolve) {
+            const got = [];
+            let left = promises.length, done = false, timer = null;
+            function finish() {
+                if (done) return;
+                done = true;
+                if (timer) clearTimeout(timer);
+                resolve(got);
+            }
+            if (!left) return finish();
+            promises.forEach(function (p) {
+                p.then(function (r) {
+                    if (r) got.push(r);
+                    left--;
+                    if ((r && good(r)) || !left) finish();
+                }, function () {
+                    left--;
+                    if (!left) finish();
+                });
+            });
+            timer = setTimeout(finish, ms);
+        });
     }
 
     async function fetchText(url, init) {
@@ -204,6 +234,19 @@
             if (isFinite(start) && isFinite(dur)) end = Math.max(end, start + dur * 1000);
         }
         return end || null;
+    }
+
+    // Is the ad in this playlist over? Live segments are at its end again (at least `need`), behind the
+    // ad's segments - or, when only the ad's tags are left in the window, behind the ad's end time.
+    // After a pre-roll Twitch keeps the ad's segments and tags in the playlist for minutes.
+    function adOver(p, text, need) {
+        const segs = p.segs;
+        let live = 0;
+        for (let i = segs.length - 1; i >= 0 && !segs[i].ad; i--) live++;
+        if (!live || live < need) return false;
+        if (live < segs.length) return true;
+        const end = adEndsAt(text);
+        return !!end && segs[0].pdt !== null && segs[0].pdt >= end - 1000;
     }
 
     // ---- ad spoofing (TTV-AB technique): report ad impressions & quartiles to Twitch GQL ----
@@ -959,10 +1002,13 @@
         const lastSeq = nat.segs[nat.segs.length - 1].seq;
         if (ads) {
             ctx.cleanStreak = 0;
-        } else {
-            if (ctx.natLastSeq === null || lastSeq > ctx.natLastSeq) ctx.cleanStreak++;  // only new playlists count
-            ctx.fmp4 = nat.segs.some(function (s) { return !!s.map; });
+        } else if (ctx.natLastSeq === null || lastSeq > ctx.natLastSeq) {
+            ctx.cleanStreak++;  // only new playlists count
         }
+        // fMP4 or MPEG-TS? The live segments tell (an ad may come as fMP4 inside an MPEG-TS stream) - also
+        // while an ad that is over still stands in the window, else the format stayed unknown for minutes
+        const live = nat.segs.filter(function (s) { return !s.ad; });
+        if (live.length) ctx.fmp4 = live.some(function (s) { return !!s.map; });
         ctx.natLastSeq = lastSeq;
     }
 
@@ -975,8 +1021,10 @@
         // 1. PRIMÄR: Ad-Spoofing versuchen, sobald Werbung in der eigenen Sitzung auftaucht.
         // Wenn Twitch nach dem Spoofing (RecordAdEvent) die Werbung sofort aus der eigenen Playlist
         // entfernt, läuft der Original-Stream ohne Qualitätswechsel direkt weiter.
-        if (natAds && adSpoofing) {
-            const spoofed = await notifyAdComplete(text, ctx);
+        // Nur solange die Werbung am Live-Ende läuft (nicht für alte Werbestücke weiter oben im Fenster),
+        // und der Player wartet darauf höchstens T.spoofWait – die Meldung läuft sonst im Hintergrund weiter.
+        if (natAds && adSpoofing && nat.segs[nat.segs.length - 1].ad) {
+            const spoofed = await within(notifyAdComplete(text, ctx).catch(function () { return false; }), T.spoofWait);
             if (spoofed) {
                 try {
                     const freshText = await fetchText(url);
@@ -1010,10 +1058,14 @@
                 return out;
             }
         }
-        // Werbung im oberen Teil des HLS-Fensters ist schon vorbei und am Live-Ende liegen wieder Live-Stücke
-        if (natAds && tl.source === nid && nat.segs.some(function (s) { return s.ad; }) && !nat.segs[nat.segs.length - 1].ad) {
+        // Die Werbung ist vorbei – am Live-Ende liegen wieder Live-Stücke –, steht aber noch im HLS-Fenster
+        // (nach einer Start-Werbung minutenlang): Der Player bekommt gleich wieder die eigene Sitzung, ohne
+        // die Werbestücke. Vorher blieb er auf der Ersatz-Sitzung (oft 360p), bis das Fenster ganz sauber war.
+        if (natAds && adOver(nat, text, tl.source === nid ? 1 : T.nativeTail)) {
+            const from = typeOf(tl.source);
             const out = serve(ctx, url, nid, nat, {strip: true});
             if (out) {
+                if (from) report('native-back', {from: from, early: true});
                 setBridge(ctx, false);
                 endAd(ctx);
                 return out;
@@ -1051,7 +1103,8 @@
                 if (hq && hq.ads) hq = null;
             }
         }
-        const lqs = (await Promise.all(lqPs)).filter(function (b) { return b && !b.ads; });
+        // the first ad-free bridge wins: a slow one must not hold up the player's request
+        const lqs = (await firstGood(lqPs, function (b) { return !b.ads; }, T.bridgeWait)).filter(function (b) { return !b.ads; });
         const picks = [];
         if (curOk && !cur.lq) picks.push(cur);
         if (hq && hq.proven) picks.push(hq);

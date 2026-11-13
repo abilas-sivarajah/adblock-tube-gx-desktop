@@ -84,6 +84,10 @@ Oben links **YouTube | Twitch** umschalten (GX Tube merkt sich die Wahl):
   iOS-App –, dann wieder in voller Qualität). Nur wenn Twitch überall Werbung zeigt, kommt für die Dauer
   der Werbung ein schwarzes Bild. Zuerst wird die Werbung per Ad-Spoofing als „gesehen“ gemeldet – oft endet
   die Pause dann sofort ohne Wechsel. Abschaltbar unter Einstellungen → Twitch („Werbung als gesehen melden“).
+  Ist die Werbung vorbei, geht es **sofort** auf die eigene Sitzung in voller Qualität zurück – auch wenn
+  Twitch die Werbestücke noch minutenlang in der Playlist stehen lässt (nach Start-Werbung üblich).
+- **Alle Kanäle spielen:** Etwa jeder dritte große Kanal kommt bei Twitch inzwischen als fMP4 (Bild und Ton
+  in einer Datei) statt als MPEG-TS. GX Tube spielt beide Formate – auch durch die Werbepausen hindurch.
 - **Chat** rechts neben Live-Streams (mit 7TV-, BTTV- und FFZ-Emotes): startet ausgeblendet, mit **c**, dem
   Chat-Knopf oder vom Handy ein-/ausblenden.
   Mitlesen geht ohne Konto, **schreiben** mit Twitch-Anmeldung.
@@ -157,6 +161,7 @@ npm test                # Unit-Tests
 npm run smoke           # App starten und wie das Handy fernsteuern (Linux ohne Bildschirm: xvfb-run npm run smoke)
 npm run test:account    # Code fürs Handy, Anmeldefenster und Laden mit Konto durchspielen (ohne echtes Konto)
 npm run test:channel    # Kanalseite, Abonnieren, Abo-Videos auf der Startseite
+npm run test:twitch-ads # Twitch-Werbepausen im echten Programm durchspielen (unsichtbar; MPEG-TS- und fMP4-Kanal)
 npm run dist:win        # Windows-Installer → dist/  (auch dist:linux, dist:mac)
 
 # Fehlersuche: Video wie vom Handy abspielen, abgelehnte Anfragen anzeigen
@@ -180,7 +185,7 @@ BLOCK_CLIENT=IOS npm run debug:play -- dQw4w9WgXcQ 60   # simuliert eine YouTube
 | Details | Nur die `/next`-Abfrage (Titel, Beschreibung, Kapitel, ähnliche Videos) – keine zusätzliche Player-Anfrage pro Video. Die Stream-Suche bricht ab, sobald ein anderes Video gewählt wird |
 | Abos | RSS-Feeds der Kanäle; fallen sie aus, höchstens 25 Kanalseiten pro Aktualisierung – mit Google angemeldet stattdessen der Abo-Feed des Kontos (eine Anfrage) |
 | Community | DeArrow (Titel über Hash-Präfix; Vorschaubilder vom DeArrow-Server) und Return YouTube Dislike – nur wenn eingeschaltet |
-| Twitch | GraphQL-Abfragen wie twitch.tv (ohne Konto mit der Kennung der Fernseher-App, dort verlangt Twitch beim Weiterblättern keine Integritätsprüfung), HLS über `usher.ttvnw.net`. Werbeblocker: `third_party/adblock-gx/twitch_worker.js` aus Adblock GX (Techniken nach [TTV-AB](https://github.com/GosuDRM/TTV-AB), MIT) hängt sich im Fenster vor Shaka in `fetch` ein und schreibt die Playlisten um. Chat über IRC-WebSocket. Anmeldung: OAuth-Geräteanmeldung (twitch.tv/activate) |
+| Twitch | GraphQL-Abfragen wie twitch.tv (ohne Konto mit der Kennung der Fernseher-App, dort verlangt Twitch beim Weiterblättern keine Integritätsprüfung), HLS über `usher.ttvnw.net`. Werbeblocker: `third_party/adblock-gx/twitch_worker.js` aus Adblock GX (Techniken nach [TTV-AB](https://github.com/GosuDRM/TTV-AB), MIT) hängt sich im Fenster vor Shaka in `fetch` ein und schreibt die Playlisten um. fMP4-Kanäle (Bild und Ton in einer Datei): `renderer/mp4-fix.js` holt in jedem Stück die Bildspur nach vorn – Shaka liest sonst den Zeitstempel der Tonspur mit der Zeitbasis der Bildspur, setzt die Stücke an falsche Stellen und das Bild friert ein. Chat über IRC-WebSocket. Anmeldung: OAuth-Geräteanmeldung (twitch.tv/activate) |
 
 ```
 src/
@@ -200,13 +205,14 @@ src/
 │   └── updater.js           # automatische Updates (GitHub-Releases)
 ├── preload/preload.cjs      # sichere Brücke zum Fenster
 └── renderer/                # Fenster: Startseite, Suche, Player (sabr.js: SABR für Shaka), Einstellungen
-                             #   twitch-ui.js: Twitch-Seiten, twitch-chat.js: Chat
+                             #   twitch-ui.js: Twitch-Seiten, twitch-chat.js: Chat, mp4-fix.js: Twitch als fMP4
 third_party/adblock-gx/      # Twitch-Werbeblocker aus Adblock GX (scripts/vendor.mjs baut daraus vendor/twitch-adblock.js)
 test/                        # Unit-Tests (node --test)
 test-e2e/smoke.mjs           # startet die echte App und steuert sie wie das Handy
 test-e2e/account-test.mjs    # Code fürs Handy, Anmeldefenster, Laden mit Konto, Abmelden
 test-e2e/channel-test.mjs    # Kanalseite, Abonnieren, "Neu von deinen Abos"
 test-e2e/twitch-test.mjs     # Twitch: Startseite, Live mit Werbeblocker und Chat, Kanal, VOD, vom Handy, Anmeldung
+test-e2e/twitch-ad-test.mjs  # Twitch-Werbepausen nachgestellt im echten Player: Hänger, 360p-Zeit, Rückweg, beide Formate
 test-e2e/youtube-ui-test.mjs # YouTube-Oberfläche (unsichtbar, stumm): Infos, Kapitel, Untertitel, Suche, Playlists, SponsorBlock
 ```
 

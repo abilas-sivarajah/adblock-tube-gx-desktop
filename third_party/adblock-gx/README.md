@@ -14,3 +14,18 @@ Zum Aktualisieren die beiden Dateien aus dem Browser-Repo neu kopieren und `SOUR
 360p-Brücke (`picture-by-picture` als iOS neben `autoplay` als Android, beide gleichzeitig gefragt),
 Brücken nach Werbung schon nach 5 s neu fragen, und eine werbefreie Sitzung, die ein paar Sekunden
 zurückliegt, sofort nehmen statt bis zu 6 s schwarzes Bild. Getestet in `test/twitch-adblock.test.js`.
+
+**Eigene Änderung (2026-11-13)**, ebenfalls beim Aktualisieren übernehmen:
+
+- **Nach der Werbung gleich zurück zur eigenen Sitzung** (`adOver`, `T.nativeTail`): Sobald am Ende der
+  eigenen Playlist wieder Live-Stücke liegen, bekommt der Player sie – ohne die Werbestücke und
+  -Markierungen, die Twitch noch im Fenster stehen lässt (nach einer Start-Werbung minutenlang). Vorher
+  blieb der Player so lange auf der Ersatz-Sitzung, oft in 360p. Stehen nur noch Markierungen ohne
+  Werbestücke im Fenster, zählt die Endzeit der Werbung (DATERANGE).
+- **Der Player wartet nicht auf langsame Anfragen**: Von den beiden 360p-Brücken gewinnt die erste
+  werbefreie (`firstGood`, höchstens `T.bridgeWait`), auf das Melden der Werbung (Ad-Spoofing) wartet er
+  höchstens `T.spoofWait` – sonst läuft sein Puffer leer und das Bild steht.
+- **Ad-Spoofing nur für laufende Werbung**: Alte Werbestücke weiter oben im Fenster werden nicht (noch
+  einmal) als gesehen gemeldet.
+
+`test-e2e/twitch-ad-test.mjs` spielt Werbepausen im echten Programm durch (MPEG-TS- und fMP4-Kanäle).

@@ -4,6 +4,7 @@
 /* global shaka */
 
 import { attachSabr } from './sabr.js';
+import { videoTrackId, videoTrafFirst } from './mp4-fix.js';
 import { parseEmsgSegmentMetadata } from './vendor/googlevideo.js';
 
 const REPORT_EVERY_MS = 1000;
@@ -62,6 +63,7 @@ export class Player {
     this.adRanges = []; // serverseitig eingefügte Werbung (ms im Video), aus den emsg-Daten erkannt
     this.captions = new Map(); // geladene Untertitel: Schlüssel → <track>-Element
     this.caption = null; // Schlüssel der gezeigten Untertitel
+    this.mp4VideoTrack = null; // Twitch-fMP4: Spur-ID des Bildes (aus dem letzten Init-Stück)
   }
 
   #dropSabr() {
@@ -80,6 +82,7 @@ export class Player {
     await this.shaka.attach(this.video);
     this.shaka.getNetworkingEngine().registerRequestFilter((type, request) => this.#filterRequest(request));
     this.shaka.getNetworkingEngine().registerResponseFilter((type, response) => this.#filterResponse(type, response));
+    this.shaka.getNetworkingEngine().registerResponseFilter((type, response) => this.#fixMuxedMp4(type, response));
     this.shaka.getNetworkingEngine().registerResponseFilter((type, response, context) => this.#detectStitchedAd(type, response, context));
     this.shaka.addEventListener('error', (e) => this.#onShakaError(e.detail));
     this.shaka.addEventListener('adaptation', () => this.onTracks());
@@ -176,6 +179,20 @@ export class Player {
       out.push(lines[i]);
     }
     response.data = new TextEncoder().encode(out.join('\n')).buffer;
+  }
+
+  /**
+   * Twitch als fMP4 mit Bild und Ton in einer Datei (etwa jeder dritte große Kanal, samt Werbung): Shaka
+   * setzt die Stücke sonst an falsche Stellen und das Bild friert ein – siehe mp4-fix.js.
+   */
+  #fixMuxedMp4(type, response) {
+    if (this.kind !== 'twitch' || type !== shaka.net.NetworkingEngine.RequestType.SEGMENT) return;
+    const data = response?.data;
+    if (!data || data.byteLength < 16) return;
+    const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    const track = videoTrackId(bytes);
+    if (track !== null) this.mp4VideoTrack = track; // Init-Stück: merken, welche Spur das Bild ist
+    else if (this.mp4VideoTrack != null) videoTrafFirst(bytes, this.mp4VideoTrack);
   }
 
   #setStatus(status) {
@@ -336,6 +353,7 @@ export class Player {
     this.mutedBySponsor = null;
     this.lastSkip = null;
     this.adRanges = [];
+    this.mp4VideoTrack = null;
     for (const el of this.captions.values()) {
       URL.revokeObjectURL(el.src);
       el.remove();
