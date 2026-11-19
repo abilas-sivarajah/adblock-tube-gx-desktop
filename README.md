@@ -88,14 +88,29 @@ Oben links **YouTube | Twitch** umschalten (GX Tube merkt sich die Wahl):
   Twitch die Werbestücke noch minutenlang in der Playlist stehen lässt (nach Start-Werbung üblich).
 - **Alle Kanäle spielen:** Etwa jeder dritte große Kanal kommt bei Twitch inzwischen als fMP4 (Bild und Ton
   in einer Datei) statt als MPEG-TS. GX Tube spielt beide Formate – auch durch die Werbepausen hindurch.
-- **Chat** rechts neben Live-Streams (mit 7TV-, BTTV- und FFZ-Emotes): startet ausgeblendet, mit **c**, dem
-  Chat-Knopf oder vom Handy ein-/ausblenden.
-  Mitlesen geht ohne Konto, **schreiben** mit Twitch-Anmeldung.
+- **Chat** rechts neben Live-Streams, wie in der Twitch-App: startet ausgeblendet, mit **c**, dem
+  Chat-Knopf oder vom Handy ein-/ausblenden. Mitlesen geht ohne Konto, **schreiben** mit Twitch-Anmeldung.
+  Abzeichen als Bilder, Emotes von Twitch, 7TV, BTTV und FFZ mit **Emote-Auswahl** (Smiley-Knopf, mit Suche),
+  **Antworten** auf Nachrichten, **@-Erwähnungen** mit Namensvorschlägen, `:kek` schlägt Emotes vor, **Tab**
+  vervollständigt. **`/`-Befehle** mit Vorschlägen und Erklärung (`/me`, `/color`, `/w`, `/block` …, für
+  Moderatoren `/ban`, `/timeout`, `/slow`, `/announce`, `/shoutout` …, für Streamer `/raid`, `/mod`, `/vip`,
+  `/marker` …). Nachricht anklicken → **Profilkarte** (Konto-Alter, folgt seit, Erwähnen, Flüstern, Kopieren,
+  Nachrichten des Nutzers, als Mod löschen/Timeout/Bann). Links sind anklickbar; Ankündigungen, Abos, Raids und
+  erste Nachrichten sind hervorgehoben; Chat-Modi (langsam, nur Follower/Abos/Emotes) stehen oben, im langsamen
+  Modus läuft ein Countdown. Beim Öffnen kommen die letzten Nachrichten (über recent-messages.robotty.de,
+  abschaltbar), optional mit Uhrzeit.
+  Für die Mod- und Streamer-Befehle braucht GX Tube mehr Rechte als früher: wer vorher angemeldet war, meldet
+  sich dafür einmal ab und neu an.
+- **Chat-Wiedergabe bei VODs:** Bei vergangenen Streams läuft der Chat passend zur Stelle im Video mit (auch
+  nach dem Springen).
+- **Clips:** Reiter „Clips“ auf jeder Kanalseite (24 Stunden, 7 Tage, 30 Tage, alle) – Clips laufen in bis zu
+  1080p; „Ganzen Stream ansehen“ in den Infos (`I`) springt an die Stelle im VOD.
+- **Eigener Suchverlauf** für Twitch (getrennt von YouTube).
 - **Bei Twitch anmelden** (Einstellungen → Twitch): wie die Twitch-App auf dem Fernseher –
   der PC zeigt einen Code für **twitch.tv/activate** auf dem Handy, oder „Hier im Fenster“ öffnet die Seite
   mit schon eingetragenem Code. Das Passwort bekommt GX Tube nie; das Token bleibt verschlüsselt auf dem PC.
 - **Vom Handy streamen:** Die Android-App kann Twitch-Streams genauso an den PC schicken wie YouTube-Videos
-  (`twitch:<kanal>` / `twitch-vod:<id>`, siehe [PROTOCOL.md](PROTOCOL.md)).
+  (`twitch:<kanal>` / `twitch-vod:<id>` / `twitch-clip:<slug>`, siehe [PROTOCOL.md](PROTOCOL.md)).
 
 ## 🌟 Funktionen
 
@@ -113,7 +128,7 @@ Oben links **YouTube | Twitch** umschalten (GX Tube merkt sich die Wahl):
 | **Updates** | Installierte Windows- und AppImage-Versionen aktualisieren sich selbst |
 | **Google-Konto** | Optional, falls YouTube ohne Anmeldung sperrt (siehe oben) |
 | **Kanäle & Abos** | Kanalname anklicken (an jedem Video und im Player) öffnet die Kanalseite. **Abonnieren** speichert den Kanal auf dem PC – mit Google angemeldet auch bei YouTube; auf der Startseite stehen dann die neuesten Videos deiner Abos |
-| **Twitch** | Live-Streams, VODs, Kategorien, Chat, Folgen, Anmeldung per Code – werbefrei (siehe oben) |
+| **Twitch** | Live-Streams, VODs mit Chat-Wiedergabe, Clips, Kategorien, Chat mit Befehlen und Emote-Auswahl, Folgen, Anmeldung per Code – werbefrei (siehe oben) |
 
 ### ⌨️ Tastatur (im Player)
 
@@ -125,7 +140,7 @@ Oben links **YouTube | Twitch** umschalten (GX Tube merkt sich die Wahl):
 | `↑` `↓` | Lautstärke |
 | `M` | Stumm |
 | `F` / Doppelklick | Vollbild |
-| `C` | Twitch-Chat ein/aus (bei YouTube: Untertitel) |
+| `C` | Twitch-Chat bzw. Chat-Wiedergabe ein/aus (bei YouTube: Untertitel) |
 | `U` | Untertitel ein/aus |
 | `I` | Infos, Kapitel und Kommentare |
 | `Q` | Warteschlange |

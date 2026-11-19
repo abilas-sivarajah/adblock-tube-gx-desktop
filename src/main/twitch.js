@@ -8,13 +8,23 @@
 
 export const WEB_CLIENT = 'kimne78kx3ncx6brgo4mv6wki5h1ko'; // twitch.tv
 export const TV_CLIENT = 'ue6666qo983tsx6so1t0vnawi233wa'; // Twitch auf dem Fernseher (Anmeldung per Code)
-export const SCOPES = 'chat:read chat:edit user:read:follows user:edit:follows';
+/** Grundrechte: Chat lesen/schreiben, Folgen. */
+export const BASE_SCOPES = 'chat:read chat:edit user:read:follows user:edit:follows';
+/** Dazu alles für die /-Befehle im Chat (Moderation, Namensfarbe, Flüstern, Emotes …) – wie in der Android-App. */
+export const SCOPES =
+  BASE_SCOPES +
+  ' user:read:emotes user:manage:chat_color user:manage:whispers user:manage:blocked_users' +
+  ' moderator:manage:banned_users moderator:manage:chat_messages moderator:manage:chat_settings' +
+  ' moderator:manage:announcements moderator:manage:shoutouts moderator:manage:warnings moderator:read:chatters' +
+  ' moderation:read channel:manage:moderators channel:manage:vips channel:read:vips channel:manage:raids' +
+  ' channel:edit:commercial channel:manage:broadcast';
 
 const GQL_URL = 'https://gql.twitch.tv/gql';
 const LOGIN = /^[a-z0-9_]{1,25}$/;
 const VOD = /^\d{1,15}$/;
-// Live: 'twitch:<login>', VOD: 'twitch-vod:<id>'
-export const TWITCH_ID = /^twitch:[a-z0-9_]{1,25}$|^twitch-vod:\d{1,15}$/;
+const CLIP_SLUG = /^[A-Za-z0-9_-]{1,120}$/;
+// Live: 'twitch:<login>', VOD: 'twitch-vod:<id>', Clip: 'twitch-clip:<slug>'
+export const TWITCH_ID = /^twitch:[a-z0-9_]{1,25}$|^twitch-vod:\d{1,15}$|^twitch-clip:[A-Za-z0-9_-]{1,120}$/;
 
 let fetchImpl = (...args) => fetch(...args);
 let authImpl = () => null; // → { token, clientId } oder null
@@ -26,6 +36,11 @@ export function configure({ fetch: f, auth, unauthorized } = {}) {
   if (unauthorized) onUnauthorized = unauthorized;
 }
 
+/** Für andere Module (Chat-Befehle): Anfrage mit dem eingestellten fetch und das Konto. */
+export const request = (...args) => fetchImpl(...args);
+export const account = () => authImpl();
+export const markUnauthorized = () => onUnauthorized();
+
 export class TwitchError extends Error {
   constructor(message, { code = null, signIn = false } = {}) {
     super(message);
@@ -36,11 +51,14 @@ export class TwitchError extends Error {
 
 // ------------------------------------------------------------------ IDs
 
-/** 'twitch:<login>' (live) oder 'twitch-vod:<id>' → { login } bzw. { vod }. */
+/** 'twitch:<login>' (live), 'twitch-vod:<id>' oder 'twitch-clip:<slug>' → { login } bzw. { vod } bzw. { clip }. */
 export function parseId(id) {
   if (typeof id !== 'string' || !TWITCH_ID.test(id)) return null;
+  if (id.startsWith('twitch-clip:')) return { vod: null, login: null, clip: id.slice(12) };
   return id.startsWith('twitch-vod:') ? { vod: id.slice(11), login: null } : { vod: null, login: id.slice(7) };
 }
+
+export const clipId = (slug) => `twitch-clip:${slug}`;
 
 export const liveId = (login) => `twitch:${String(login).toLowerCase()}`;
 export const vodId = (id) => `twitch-vod:${id}`;
@@ -164,6 +182,45 @@ export function toVod(node, owner = null) {
     game: game(node.game),
     isLive: false,
   };
+}
+
+const CLIP_FIELDS = 'id slug title viewCount durationSeconds createdAt thumbnailURL(width: 480, height: 272) game { name displayName } curator { login displayName } broadcaster { id login displayName profileImageURL(width: 70) }';
+
+/** Ein Clip (id 'twitch-clip:<slug>'). */
+export function toClip(node) {
+  if (!node?.slug || !CLIP_SLUG.test(node.slug)) return null;
+  const b = node.broadcaster ?? {};
+  const login = b.login?.toLowerCase() ?? null;
+  return {
+    kind: 'clip',
+    platform: 'twitch',
+    id: clipId(node.slug),
+    clip: node.slug,
+    title: node.title ?? '',
+    channelName: b.displayName || b.login || '',
+    channelLogin: login,
+    channelUserId: b.id ?? null,
+    avatar: b.profileImageURL ?? null,
+    thumbnail: node.thumbnailURL ?? null,
+    durationSec: Number(node.durationSeconds) || 0,
+    views: Number(node.viewCount) || 0,
+    publishedAt: ms(node.createdAt),
+    curator: node.curator?.displayName || node.curator?.login || null,
+    game: game(node.game),
+    isLive: false,
+  };
+}
+
+/** Zeiträume für Clips (wie auf twitch.tv). */
+export const CLIP_PERIODS = { day: 'LAST_DAY', week: 'LAST_WEEK', month: 'LAST_MONTH', all: 'ALL_TIME' };
+
+/** Beliebteste Clips eines Kanals im Zeitraum (Twitch blättert hier nicht weiter – höchstens 50). */
+export async function clips(login, period = 'week') {
+  if (!validLogin(login)) throw new TwitchError('Ungültiger Kanal');
+  const p = CLIP_PERIODS[period] ?? CLIP_PERIODS.week;
+  const data = await gql(`query($login: String!) { user(login: $login) { clips(first: 50, criteria: {period: ${p}, sort: VIEWS_DESC}) { edges { node { ${CLIP_FIELDS} } } } } }`, { login: login.toLowerCase() });
+  if (!data.user) throw new TwitchError('Kanal nicht gefunden');
+  return edges(data.user.clips).map((e) => toClip(e.node)).filter(Boolean);
 }
 
 export function toGame(node) {
@@ -426,6 +483,12 @@ export async function users(logins) {
 export async function watchInfo(id) {
   const t = parseId(id);
   if (!t) throw new TwitchError('Ungültiger Twitch-Stream');
+  if (t.clip) {
+    const data = await gql(`query($slug: ID!) { clip(slug: $slug) { ${CLIP_FIELDS} videoOffsetSeconds video { id } broadcaster { followers { totalCount } } } }`, { slug: t.clip });
+    const c = toClip(data.clip);
+    if (!c) throw new TwitchError('Diesen Clip gibt es nicht mehr');
+    return { ...c, followers: data.clip.broadcaster?.followers?.totalCount ?? null, clipVod: data.clip.video?.id ?? null, clipOffset: Number(data.clip.videoOffsetSeconds) || 0 };
+  }
   if (t.vod) {
     const data = await gql(`query($id: ID!) { video(id: $id) { ${VIDEO_FIELDS} owner { ${USER_FIELDS} followers { totalCount } } } }`, { id: t.vod });
     if (!data.video) throw new TwitchError('Dieses Video gibt es nicht mehr');
@@ -478,6 +541,7 @@ export function usherUrl({ login = null, vod = null, token }) {
 export async function playback(id) {
   const t = parseId(id);
   if (!t) throw new TwitchError('Ungültiger Twitch-Stream');
+  if (t.clip) return clipPlayback(t.clip);
   const variables = { isLive: !t.vod, login: t.login ?? '', isVod: Boolean(t.vod), vodID: t.vod ?? '', playerType: 'site', platform: 'web' };
   let lastError = null;
   for (const auth of authImpl() ? [true, false] : [false]) {
@@ -504,6 +568,30 @@ export async function playback(id) {
     }
   }
   throw lastError;
+}
+
+/** Clip: MP4-Datei in der besten Qualität bis [maxHeight], mit Twitchs Zugangs-Token. */
+export async function clipPlayback(slug, maxHeight = 1080) {
+  if (!CLIP_SLUG.test(slug ?? '')) throw new TwitchError('Ungültiger Clip');
+  const data = await gql(
+    'query($slug: ID!) { clip(slug: $slug) { broadcaster { login } playbackAccessToken(params: {platform: "web", playerBackend: "mediaplayer", playerType: "site"}) { signature value } videoQualities { frameRate quality sourceURL } } }',
+    { slug },
+    { clientId: WEB_CLIENT },
+  );
+  const c = data.clip;
+  if (!c) throw new TwitchError('Diesen Clip gibt es nicht mehr');
+  const tok = c.playbackAccessToken;
+  if (!tok?.signature || !tok?.value) throw new TwitchError('Twitch gibt den Clip gerade nicht heraus');
+  const qualities = (c.videoQualities ?? [])
+    .filter((q) => q?.sourceURL)
+    .map((q) => ({ height: Number(q.quality) || 0, url: q.sourceURL }))
+    .sort((a, b) => b.height - a.height);
+  const pick = qualities.find((q) => q.height <= maxHeight) ?? qualities[qualities.length - 1];
+  if (!pick) throw new TwitchError('Clip ohne Video');
+  const u = new URL(pick.url);
+  u.searchParams.set('sig', tok.signature);
+  u.searchParams.set('token', tok.value);
+  return { url: u.toString(), isLive: false, login: c.broadcaster?.login?.toLowerCase() ?? null, vod: null, clip: slug, account: false, height: pick.height };
 }
 
 // ------------------------------------------------------------------ Mit Konto
@@ -621,7 +709,13 @@ async function postForm(url, params) {
  * done liefert die Tokens { access_token, refresh_token, expires_at, scopes, client_id }.
  */
 export async function startDeviceLogin({ wait = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
-  const start = await postForm('https://id.twitch.tv/oauth2/device', { client_id: TV_CLIENT, scopes: SCOPES });
+  let scopes = SCOPES;
+  let start = await postForm('https://id.twitch.tv/oauth2/device', { client_id: TV_CLIENT, scopes });
+  // Nimmt Twitch die Rechte für die Chat-Befehle nicht an: mit den Grundrechten anmelden
+  if (!start.json.device_code && start.status >= 400 && start.status < 500) {
+    scopes = BASE_SCOPES;
+    start = await postForm('https://id.twitch.tv/oauth2/device', { client_id: TV_CLIENT, scopes });
+  }
   if (!start.ok || !start.json.device_code) throw new Error(`Twitch gibt gerade keinen Code heraus (${start.json.message ?? start.status})`);
   const { device_code: deviceCode, user_code: userCode, verification_uri: verificationUrl, expires_in: expiresIn = 1800, interval = 5 } = start.json;
   const expiresAt = Date.now() + expiresIn * 1000;
@@ -637,7 +731,7 @@ export async function startDeviceLogin({ wait = (ms) => new Promise((r) => setTi
         client_id: TV_CLIENT,
         device_code: deviceCode,
         grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-        scopes: SCOPES,
+        scopes,
       }).catch(() => null);
       if (!r) continue;
       if (r.ok && r.json.access_token) return tokensFrom(r.json, TV_CLIENT);

@@ -4,7 +4,8 @@ import { Player } from './player.js';
 import { hydrateIcons, icon, setIcon } from './icons.js';
 import { count, duration, durationMs, el, qualityLabel, relativeTime, speedLabel } from './format.js';
 import * as Twitch from './twitch-ui.js';
-import { TwitchChat } from './twitch-chat.js';
+import { TwitchChat, fragments as fragmentsOf, thirdPartyEmotes } from './twitch-chat.js';
+import { COMMANDS, allowed, commandSuggestions, findCommand, parseCommand } from './chat-commands.js';
 import { chapterAt, createBrandingLoader, startFromUrl, storyboardFrame, textParts, videoIdFromUrl } from './yt-extras.js';
 
 const gx = window.gx;
@@ -41,6 +42,7 @@ const state = {
 const video = $('video');
 const isTwitch = (v) => typeof v?.id === 'string' && v.id.startsWith('twitch');
 const twitchLive = (v) => isTwitch(v) && v.id.startsWith('twitch:');
+const twitchVod = (v) => isTwitch(v) && v.id.startsWith('twitch-vod:');
 const player = new Player(video, {
   onStatus: (s) => renderStatus(s),
   onSkip: (seg) => {
@@ -229,6 +231,7 @@ function onLoading({ token, video: v }) {
   hideAdOverlay();
   renderTwitchControls();
   if (twitchLive(v)) startChat(v.channelLogin || v.id.slice(7));
+  else if (twitchVod(v)) startReplay(v.id.slice(11), v.channelLogin ?? null);
   else stopChat();
   renderTitle();
   renderSegments();
@@ -336,7 +339,8 @@ function bindTopbar() {
   });
   input.addEventListener('focus', async () => {
     const lib = await gx.library();
-    recent = lib.searchHistory;
+    // YouTube und Twitch haben getrennte Suchverläufe
+    recent = (state.platform === 'twitch' ? lib.twitchSearchHistory : lib.searchHistory) ?? [];
     if (!input.value.trim() && document.activeElement === input) showSuggestions(textEntries(recent.slice(0, 10), true));
   });
   input.addEventListener('keydown', (e) => {
@@ -1637,6 +1641,16 @@ function renderInfo() {
   }
   if (isTwitch(v)) {
     $('infoSub').textContent = 'Twitch';
+    // Clip: wer ihn erstellt hat, und ab zur Stelle im ganzen Stream
+    const t = state.details?.twitch;
+    if (v.id.startsWith('twitch-clip:') && t) {
+      if (t.curator) main.append(el('p', 'info-note', `Clip von ${t.curator}`));
+      if (t.clipVod) {
+        const b = el('button', 'pill small', 'Ganzen Stream ansehen');
+        b.addEventListener('click', () => gx.play({ id: `twitch-vod:${t.clipVod}`, title: '', channelName: t.channelName ?? '', channelLogin: t.channelLogin ?? null, durationSec: -1, isLive: false }, null, (t.clipOffset || 0) * 1000));
+        main.append(b);
+      }
+    }
     main.append(el('p', 'info-note', 'Für Twitch gibt es hier keine Beschreibung – mehr steht auf der Kanalseite.'));
     comments.replaceChildren();
     return;
@@ -1953,7 +1967,7 @@ function bindKeys() {
     else if (k === 'f' || k === 'F') gx.setFullscreen(!state.fullscreen);
     else if (k === 'q' || k === 'Q') toggleQueue();
     else if (k === 'i' || k === 'I') toggleInfo();
-    else if ((k === 'c' || k === 'C') && twitchLive(state.video)) toggleChat();
+    else if ((k === 'c' || k === 'C') && chatAvailable(state.video)) toggleChat();
     else if ((k === 'c' || k === 'C' || k === 'u' || k === 'U') && state.captionTracks.length) toggleCaptions();
     else if (k === 'N' && e.shiftKey) gx.next();
     else if (k === 'P' && e.shiftKey) gx.previous(player.positionMs);
@@ -2095,6 +2109,8 @@ async function renderSettings() {
   f.append(el('h3', null, 'Twitch'));
   f.append(Twitch.accountRow());
   f.append(toggleRow('Chat gleich zeigen', 'Den Stream-Chat sofort neben Live-Streams öffnen. Sonst startet er ausgeblendet – einblenden mit „c“, dem Chat-Knopf oder vom Handy', 'twitchChatOpen'));
+  f.append(toggleRow('Letzte Chat-Nachrichten laden', 'Beim Öffnen die Nachrichten der letzten Minuten zeigen (über recent-messages.robotty.de)', 'twitchChatHistory'));
+  f.append(toggleRow('Uhrzeit im Chat', 'Vor jeder Chat-Nachricht die Uhrzeit zeigen (bei vergangenen Streams die Stelle im Video)', 'twitchChatTimestamps'));
   const adRow = el('div', 'set-row');
   const adLabel = el('div', 'label');
   adLabel.append(el('b', null, 'Twitch-Werbeblocker'), el('span', null, 'Aus Adblock GX: überspringt Werbepausen – der Stream läuft über eine werbefreie zweite Sitzung weiter. Nur wenn Twitch überall Werbung zeigt, kommt so lange ein schwarzes Bild. Immer an.'));
@@ -2382,7 +2398,7 @@ function renderAccount() {
 function renderTwitchControls() {
   const v = state.video;
   const tw = isTwitch(v);
-  $('btnChat').hidden = !twitchLive(v);
+  $('btnChat').hidden = !chatAvailable(v);
   document.querySelector('.autoplay-switch').hidden = tw;
   $('btnSpeed').hidden = tw && v.isLive;
 }
@@ -2398,15 +2414,26 @@ function openTwitchQualityMenu() {
   openMenu($('btnQuality'), items, { title: 'Qualität', above: true });
 }
 
-// Chat: liest anonym mit, schreibt mit Twitch-Konto
+// Chat: liest anonym mit, schreibt mit Twitch-Konto – wie in der Twitch-App mit Abzeichen, Antworten,
+// @-Erwähnungen, /-Befehlen, Emote-Auswahl und Profilkarten. Bei VODs: Chat-Wiedergabe zur Stelle im Video.
 let chat = null;
 let chatLogin = null;
 let chatStick = true;
 // Chat gewünscht? Beim Start ausgeblendet (außer in den Einstellungen anders gewählt), danach gilt die letzte Wahl
 let chatWanted = null;
 const CHAT_MAX = 250;
-const BADGES = { broadcaster: ['▶', 'Streamer'], moderator: ['MOD', 'Moderator'], vip: ['VIP', 'VIP'], subscriber: ['★', 'Abonnent'] };
+const BADGES = { broadcaster: ['▶', 'Streamer'], moderator: ['MOD', 'Moderator'], vip: ['VIP', 'VIP'], subscriber: ['★', 'Abonnent'], founder: ['★', 'Gründer'], staff: ['STAFF', 'Twitch-Mitarbeiter'], partner: ['✓', 'Partner'] };
 const NAME_COLORS = ['#ff7f50', '#1e90ff', '#9acd32', '#ff69b4', '#daa520', '#5f9ea0', '#00ff7f', '#b22222', '#d2691e', '#8a2be2', '#2e8b57', '#ff4500'];
+let chatBadges = {}; // "set/version" → Bild
+let chatMe = null; // { name, mod, vip, broadcaster, badgeList }
+let chatRoom = { slow: 0, followersOnly: -1, subsOnly: false, emoteOnly: false, uniqueChat: false, roomId: null };
+let chatReplyTo = null;
+const chatMsgs = new Map(); // id → Nachricht (für Profilkarte und Antworten)
+let chatSuggest = { items: [], active: 0 };
+let chatRecentEmotes = [];
+let chatCooldownTimer = null;
+// Chat-Wiedergabe bei VODs
+let replay = null; // { vod, login, buffer, cursor, start, timer, shown, busy, failures }
 
 function bindChat() {
   chat = new TwitchChat({
@@ -2417,11 +2444,42 @@ function bindChat() {
         list.replaceChildren(el('div', 'chat-line system', 'Der Chat wurde von einem Moderator geleert.'));
         return;
       }
-      for (const line of list.querySelectorAll(id ? `[data-id="${CSS.escape(id)}"]` : `[data-login="${CSS.escape(login)}"]`)) line.classList.add('deleted');
+      for (const line of list.querySelectorAll(id ? `[data-id="${CSS.escape(id)}"]` : `[data-login="${CSS.escape(login)}"]`)) markDeleted(line);
     },
-    onInfo: (text) => addChatLine({ id: `info-${Date.now()}`, system: true, frags: [{ text }] }),
+    onUpdate: ({ id, newId, failed }) => {
+      const line = $('chatList').querySelector(`[data-id="${CSS.escape(id)}"]`);
+      const m = chatMsgs.get(id);
+      if (failed) {
+        line?.classList.add('failed');
+        if (line) line.title = 'Nicht gesendet';
+        return;
+      }
+      if (newId) {
+        if (line) line.dataset.id = newId;
+        if (m) {
+          chatMsgs.delete(id);
+          m.id = newId;
+          chatMsgs.set(newId, m);
+        }
+      }
+    },
+    onInfo: (text) => chatInfo(text),
     onState: (s) => renderChatState(s),
-    onAuthFailed: () => addChatLine({ id: `auth-${Date.now()}`, system: true, frags: [{ text: 'Twitch hat die Anmeldung für den Chat abgelehnt – du liest weiter mit. Melde dich in den Einstellungen neu bei Twitch an.' }] }),
+    onRoom: (r) => {
+      const roomChanged = r.roomId && r.roomId !== chatRoom.roomId;
+      chatRoom = r;
+      renderChatRoom();
+      // Eigene Twitch-Emotes (Abos …) für die Auswahl und die eigene Nachricht
+      if (roomChanged && chat.auth) gx.twitchEmotes(r.roomId).then((map) => chat.setTwitchEmotes(map)).catch(() => {});
+    },
+    onMe: (me) => {
+      chatMe = me;
+      renderChatRoom();
+    },
+    onEmotes: () => {
+      if (!$('chatEmotes').hidden) renderEmotePicker();
+    },
+    onAuthFailed: () => chatInfo('Twitch hat die Anmeldung für den Chat abgelehnt – du liest weiter mit. Melde dich in den Einstellungen neu bei Twitch an.'),
   });
   const list = $('chatList');
   list.addEventListener('scroll', () => {
@@ -2433,19 +2491,54 @@ function bindChat() {
     chatStick = true;
     $('chatJump').hidden = true;
   });
+  // Nachricht oder Erwähnung angeklickt: Profilkarte; Links öffnen
+  list.addEventListener('click', (e) => {
+    const link = e.target.closest('.chat-link');
+    if (link) return openChatLink(link.dataset.url);
+    const mention = e.target.closest('.chat-mention');
+    if (mention) return openChatCard(mention.dataset.login, null);
+    const line = e.target.closest('.chat-line');
+    if (!line || line.classList.contains('system') || !line.dataset.login) return;
+    if (window.getSelection()?.toString()) return; // Text markiert – nicht stören
+    openChatCard(line.dataset.login, chatMsgs.get(line.dataset.id) ?? null);
+  });
   $('chatForm').addEventListener('submit', (e) => {
     e.preventDefault();
-    const input = $('chatInput');
-    if (chat.send(input.value)) {
-      input.value = '';
-      chatStick = true;
-    }
+    submitChat();
   });
-  $('chatInput').addEventListener('keydown', (e) => {
+  const input = $('chatInput');
+  input.addEventListener('input', () => updateChatSuggestions());
+  input.addEventListener('click', () => updateChatSuggestions());
+  input.addEventListener('keydown', (e) => {
     // Tasten im Chat steuern nicht den Player
     e.stopPropagation();
-    if (e.key === 'Escape') $('chatInput').blur();
+    const open = !$('chatSuggest').hidden && chatSuggest.items.length;
+    if (open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      e.preventDefault();
+      chatSuggest.active = (chatSuggest.active + (e.key === 'ArrowDown' ? 1 : -1) + chatSuggest.items.length) % chatSuggest.items.length;
+      renderChatSuggestions();
+    } else if (open && (e.key === 'Tab' || (e.key === 'Enter' && chatSuggest.manual))) {
+      e.preventDefault();
+      applyChatSuggestion(chatSuggest.items[chatSuggest.active]);
+    } else if (e.key === 'Tab') {
+      e.preventDefault();
+      updateChatSuggestions(true);
+    } else if (e.key === 'Escape') {
+      if (open) hideChatSuggestions();
+      else if (chatReplyTo) setChatReply(null);
+      else input.blur();
+    }
   });
+  input.addEventListener('blur', () => setTimeout(() => {
+    if (document.activeElement !== input) hideChatSuggestions();
+  }, 150));
+  $('chatEmoteBtn').addEventListener('click', () => {
+    const box = $('chatEmotes');
+    box.hidden = !box.hidden;
+    if (!box.hidden) renderEmotePicker();
+  });
+  $('chatReplyClose').addEventListener('click', () => setChatReply(null));
+  $('chatCard').addEventListener('keydown', (e) => e.stopPropagation());
   $('chatLoginBtn').addEventListener('click', () => Twitch.openLoginDialog());
   // Dem Handy melden, ob der Chat zu sehen ist
   new MutationObserver(() => gx.chatVisible(!$('chatPanel').hidden)).observe($('chatPanel'), { attributes: true, attributeFilter: ['hidden'] });
@@ -2453,12 +2546,27 @@ function bindChat() {
 
 async function startChat(login) {
   if (!login) return;
+  stopReplay();
+  const fresh = chat.channel !== login || chatLogin !== login;
   chatLogin = login;
+  $('chatTitle').textContent = 'Stream-Chat';
   $('chatSub').textContent = login;
-  if (chat.channel !== login) $('chatList').replaceChildren(el('div', 'chat-line system', `Willkommen im Chat von ${login}!`));
+  if (fresh) {
+    $('chatList').replaceChildren(el('div', 'chat-line system', `Willkommen im Chat von ${login}!`));
+    chatMsgs.clear();
+    chatMe = null;
+    chatRoom = { slow: 0, followersOnly: -1, subsOnly: false, emoteOnly: false, uniqueChat: false, roomId: null };
+    setChatReply(null);
+    closeChatCard();
+    renderChatRoom();
+    gx.twitchBadges(login).then((b) => {
+      if (chatLogin === login) chatBadges = b ?? {};
+    });
+  }
   const auth = await gx.twitchChatAuth().catch(() => null);
   if (chatLogin !== login) return;
   chat.join(login, auth);
+  if (state.settings?.twitchChatHistory !== false) chat.loadHistory();
   renderChatState();
   chatWanted ??= state.settings?.twitchChatOpen === true;
   if (chatWanted && $('queuePanel').hidden) toggleChat(true);
@@ -2467,11 +2575,17 @@ async function startChat(login) {
 function stopChat() {
   chatLogin = null;
   chat?.close();
+  stopReplay();
+  closeChatCard();
   $('chatPanel').hidden = true;
 }
 
+function chatAvailable(v = state.video) {
+  return twitchLive(v) || twitchVod(v);
+}
+
 function toggleChat(force) {
-  if (!twitchLive(state.video)) return;
+  if (!chatAvailable()) return;
   const panel = $('chatPanel');
   panel.hidden = force === undefined ? !panel.hidden : !force;
   chatWanted = !panel.hidden;
@@ -2484,11 +2598,52 @@ function toggleChat(force) {
 }
 
 function renderChatState(s) {
+  if (replay) {
+    $('chatForm').hidden = true;
+    $('chatLogin').hidden = true;
+    return;
+  }
   const loggedIn = Boolean(chat?.auth);
   $('chatForm').hidden = !loggedIn;
   $('chatLogin').hidden = loggedIn;
   if (s === 'connecting' && chatLogin) $('chatSub').textContent = `${chatLogin} · verbinde …`;
   else if (s === 'open') $('chatSub').textContent = `${chatLogin}${loggedIn ? '' : ' · nur lesen'}`;
+}
+
+/** Chat-Modi oben (langsam, nur Follower …) und der Countdown im langsamen Modus. */
+function renderChatRoom() {
+  const box = $('chatRoom');
+  const r = chatRoom;
+  const chips = [];
+  if (r.slow > 0) chips.push(`Langsam ${r.slow} s`);
+  if (r.followersOnly === 0) chips.push('Nur Follower');
+  else if (r.followersOnly > 0) chips.push(`Nur Follower (${minutesLabel(r.followersOnly)})`);
+  if (r.subsOnly) chips.push('Nur Abos');
+  if (r.emoteOnly) chips.push('Nur Emotes');
+  if (r.uniqueChat) chips.push('Einzigartig');
+  box.replaceChildren(...chips.map((c) => el('span', null, c)));
+  box.hidden = !chips.length || Boolean(replay);
+  $('chatInput').placeholder = chatReplyTo ? 'Antwort senden' : r.emoteOnly && !chatMe?.mod ? 'Nur Emotes' : 'Nachricht senden';
+}
+
+function minutesLabel(m) {
+  if (m < 60) return `${m} Min.`;
+  if (m < 1440) return `${Math.floor(m / 60)} Std.`;
+  if (m < 43200) return `${Math.floor(m / 1440)} Tage`;
+  return `${Math.floor(m / 43200)} Monate`;
+}
+
+function tickChatCooldown() {
+  clearTimeout(chatCooldownTimer);
+  const left = Math.ceil((chat?.cooldownLeft() ?? 0) / 1000);
+  $('chatCooldown').hidden = left <= 0;
+  $('chatSend').hidden = left > 0;
+  $('chatCooldown').textContent = `${left} s`;
+  if (left > 0) chatCooldownTimer = setTimeout(tickChatCooldown, 250);
+}
+
+function chatInfo(text) {
+  addChatLine({ id: `info-${Date.now()}-${Math.random()}`, system: true, frags: [{ text }], text });
 }
 
 function nameColor(color, login) {
@@ -2506,17 +2661,41 @@ function nameColor(color, login) {
   return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`;
 }
 
-function addChatLine(m) {
-  const list = $('chatList');
-  const line = el('div', 'chat-line' + (m.system ? ' system' : '') + (m.highlight ? ' highlight' : '') + (m.mention ? ' mention' : '') + (m.self ? ' self' : ''));
+const chatTimeFormat = new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' });
+
+/** Eine Chat-Zeile bauen (Live-Chat und Chat-Wiedergabe). */
+function chatLineElement(m, { replayMode = false } = {}) {
+  const cls = ['chat-line'];
+  if (m.system) cls.push('system');
+  if (m.highlight) cls.push('highlight');
+  if (m.mention) cls.push('mention');
+  if (m.self) cls.push('self');
+  if (m.history) cls.push('history');
+  if (m.accent) cls.push('accent');
+  const line = el('div', cls.join(' '));
+  if (m.accent) line.style.setProperty('--accent', m.accent);
   line.dataset.id = m.id;
   if (m.login) line.dataset.login = m.login;
+  if (m.label) line.append(el('span', 'chat-label', m.label));
+  if (m.reply) {
+    const r = el('div', 'chat-replyto');
+    r.append(icon('reply'), el('span', null, `Antwort an @${m.reply.name}: ${m.reply.text}`));
+    line.append(r);
+  }
+  if (state.settings?.twitchChatTimestamps && m.time != null) line.append(el('span', 'chat-time', replayMode ? duration(Math.floor(m.time / 1000)) : chatTimeFormat.format(new Date(m.time))));
   if (!m.system) {
-    for (const b of m.badges ?? []) {
-      const badge = BADGES[b];
-      if (badge) {
-        const span = el('span', `chat-badge ${b}`, badge[0]);
-        span.title = badge[1];
+    for (const b of m.badgeList ?? (m.badges ?? []).map((n) => `${n}/1`)) {
+      const set = b.split('/')[0];
+      const url = chatBadges[b] ?? chatBadges[`${set}/1`];
+      if (url) {
+        const img = el('img', 'chat-badge-img');
+        img.src = url;
+        img.alt = set;
+        img.title = BADGES[set]?.[1] ?? set;
+        line.append(img);
+      } else if (BADGES[set]) {
+        const span = el('span', `chat-badge ${set}`, BADGES[set][0]);
+        span.title = BADGES[set][1];
         line.append(span);
       }
     }
@@ -2525,21 +2704,515 @@ function addChatLine(m) {
     line.append(name, document.createTextNode(m.action ? ' ' : ': '));
   }
   const body = el('span', m.action ? 'chat-text action' : 'chat-text');
-  for (const f of m.frags ?? []) {
+  appendFrags(body, m.frags ?? []);
+  if (m.action && !m.system) body.style.color = nameColor(m.color, m.login);
+  line.append(body);
+  return line;
+}
+
+function appendFrags(body, frags) {
+  const mine = chat?.auth?.login;
+  for (const f of frags) {
     if (f.emote) {
       const img = el('img', 'chat-emote');
       img.src = f.url;
       img.alt = f.name;
       img.title = f.name;
       body.append(img);
-    } else body.append(document.createTextNode(f.text));
+    } else if (f.mention) {
+      const s = el('span', 'chat-mention' + (mine && f.mention.toLowerCase() === mine ? ' me' : ''), `@${f.mention}`);
+      s.dataset.login = f.mention.toLowerCase();
+      body.append(s);
+    } else if (f.link) {
+      const a = el('span', 'chat-link', f.link);
+      a.dataset.url = f.link;
+      body.append(a);
+    } else body.append(document.createTextNode(f.text ?? ''));
   }
-  if (m.action && !m.system) body.style.color = nameColor(m.color, m.login);
-  line.append(body);
-  list.append(line);
+}
+
+function markDeleted(line) {
+  // Moderatoren sehen den Text durchgestrichen, alle anderen „‹Nachricht gelöscht›“ (eigene bleiben lesbar)
+  if (chatMe?.mod || line.classList.contains('self')) {
+    line.classList.add('deleted');
+    return;
+  }
+  line.classList.add('hidden-text');
+  line.querySelector('.chat-text')?.replaceChildren(document.createTextNode('‹Nachricht gelöscht›'));
+}
+
+function addChatLine(m) {
+  const list = $('chatList');
+  if (m.id && list.querySelector(`[data-id="${CSS.escape(m.id)}"]`)) return;
+  if (m.login) {
+    chatMsgs.set(m.id, m);
+    if (chatMsgs.size > 600) chatMsgs.delete(chatMsgs.keys().next().value);
+  }
+  const line = chatLineElement(m);
+  // Verlauf vor die Live-Nachrichten (nach Zeit), sonst unten anhängen
+  if (m.history) {
+    const later = [...list.children].find((c) => !c.classList.contains('history') && !c.classList.contains('system'));
+    list.insertBefore(line, later ?? null);
+  } else list.append(line);
   while (list.childElementCount > CHAT_MAX) list.firstElementChild.remove();
   if (chatStick) list.scrollTop = list.scrollHeight;
   else $('chatJump').hidden = false;
+}
+
+function openChatLink(url) {
+  const full = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+  const tw = /^https?:\/\/(?:www\.|m\.)?twitch\.tv\/([a-z0-9_]{3,25})\/?$/i.exec(full);
+  if (tw) {
+    if (state.fullscreen) gx.setFullscreen(false);
+    Twitch.openChannel(tw[1].toLowerCase());
+  } else gx.openExternal(full);
+}
+
+// ---------------------------------------------------------------- Eingabe, Befehle, Vorschläge
+
+function setChatReply(m) {
+  chatReplyTo = m;
+  $('chatReply').hidden = !m;
+  $('chatReplyText').textContent = m ? `Antwort an @${m.name}: ${m.text ?? ''}` : '';
+  renderChatRoom();
+  if (m) $('chatInput').focus();
+}
+
+async function submitChat() {
+  const input = $('chatInput');
+  const text = input.value.trim();
+  if (!text) return;
+  hideChatSuggestions();
+  const cmd = parseCommand(text);
+  if (cmd && cmd.name !== 'me') {
+    const def = findCommand(cmd.name);
+    if (!def) return chatInfo(`Unbekannter Befehl: /${cmd.name} – /help zeigt alle Befehle.`);
+    if (def.name === 'help') {
+      input.value = '';
+      chatInfo(`Befehle: ${COMMANDS.filter((c) => allowed(c, chatMe)).map((c) => `/${c.name}`).join('  ')}`);
+      chatInfo('Tippe / für Vorschläge mit Erklärung. @ ergänzt Namen, : ergänzt Emotes, Tab vervollständigt.');
+      return;
+    }
+    if (def.name === 'user') {
+      if (!cmd.words[0]) return chatInfo(`So geht's: /user ${def.args} – ${def.description}`);
+      input.value = '';
+      return openChatCard(cmd.words[0].replace(/^@/, '').toLowerCase(), null);
+    }
+    const r = await gx.twitchChatCommand(def.name, cmd.args, { roomId: chatRoom.roomId, broadcaster: Boolean(chatMe?.broadcaster), mod: Boolean(chatMe?.mod) });
+    if (r?.ok) {
+      input.value = '';
+      if (r.message) chatInfo(r.message);
+    } else chatInfo(r?.error ?? 'Befehl fehlgeschlagen');
+    return;
+  }
+  if (chat.send(text, { replyTo: chatReplyTo })) {
+    input.value = '';
+    setChatReply(null);
+    chatStick = true;
+    chatRecentEmotes = [...new Set([...text.split(/\s+/).filter((w) => chat.twitchEmotes.has(w) || chat.emotes.has(w)), ...chatRecentEmotes])].slice(0, 24);
+    tickChatCooldown();
+  }
+}
+
+/** Wort vor dem Cursor: { start, word }. */
+function chatWord(input) {
+  const pos = input.selectionStart ?? input.value.length;
+  const before = input.value.slice(0, pos);
+  const start = before.lastIndexOf(' ') + 1;
+  return { start, word: before.slice(start), pos };
+}
+
+function allChatEmotes() {
+  return new Map([...(chat?.twitchEmotes ?? []), ...(chat?.emotes ?? [])]);
+}
+
+/** Vorschläge beim Tippen: /Befehle, @Namen, Namen nach /ban usw., :Emotes. [manual]: per Tab angefordert. */
+function updateChatSuggestions(manual = false) {
+  const input = $('chatInput');
+  if (input.selectionStart !== input.selectionEnd) return hideChatSuggestions();
+  const { start, word } = chatWord(input);
+  const text = input.value;
+  let items = [];
+  if (start === 0 && word.startsWith('/')) {
+    items = commandSuggestions(word.slice(1), chatMe).map((c) => ({ kind: 'cmd', cmd: c, insert: `/${c.name}` }));
+  } else if (word.startsWith('@')) {
+    items = chat.chattersMatching(word.slice(1)).map((u) => ({ kind: 'user', ...u, insert: `@${u.name}` }));
+  } else if (start > 0 && text.startsWith('/') && !text.slice(0, start - 1).includes(' ') && findCommand(text.slice(1, start - 1))?.user) {
+    items = chat.chattersMatching(word).map((u) => ({ kind: 'user', ...u, insert: u.name }));
+  } else if ((word.startsWith(':') && word.length >= 3) || (manual && word.length >= 2)) {
+    const q = word.replace(/^:/, '').toLowerCase();
+    const list = [...allChatEmotes()].filter(([n]) => n.toLowerCase().includes(q));
+    list.sort((a, b) => Number(!a[0].toLowerCase().startsWith(q)) - Number(!b[0].toLowerCase().startsWith(q)) || a[0].length - b[0].length);
+    items = list.slice(0, 20).map(([name, url]) => ({ kind: 'emote', name, url, insert: name }));
+    // Tab ohne ":" vervollständigt auch Namen aus dem Chat
+    if (manual && !word.startsWith(':')) items.push(...chat.chattersMatching(word, 5).map((u) => ({ kind: 'user', ...u, insert: u.name })));
+  }
+  chatSuggest = { items, active: 0, manual };
+  if (manual && items.length === 1) return applyChatSuggestion(items[0]);
+  renderChatSuggestions();
+}
+
+function renderChatSuggestions() {
+  const box = $('chatSuggest');
+  box.replaceChildren();
+  chatSuggest.items.slice(0, 30).forEach((s, i) => {
+    const li = el('li', i === chatSuggest.active ? 'active' : null);
+    if (s.kind === 'cmd') {
+      const d = el('div', 'cmd');
+      const b = el('b', null, `/${s.cmd.name}`);
+      if (s.cmd.args) b.append(el('i', null, ` ${s.cmd.args}`));
+      d.append(b, el('small', null, s.cmd.description));
+      li.append(d);
+    } else if (s.kind === 'user') {
+      const n = el('b', null, s.insert);
+      n.style.color = nameColor(null, s.login);
+      li.append(n);
+    } else {
+      const img = el('img');
+      img.src = s.url;
+      img.alt = '';
+      li.append(img, el('span', null, s.name));
+    }
+    li.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      applyChatSuggestion(s);
+    });
+    box.append(li);
+  });
+  box.hidden = !chatSuggest.items.length;
+  if (!box.hidden) box.children[chatSuggest.active]?.scrollIntoView({ block: 'nearest' });
+}
+
+function hideChatSuggestions() {
+  chatSuggest = { items: [], active: 0 };
+  $('chatSuggest').hidden = true;
+}
+
+function applyChatSuggestion(s) {
+  if (!s) return;
+  const input = $('chatInput');
+  const { start, pos } = chatWord(input);
+  const after = input.value.slice(pos);
+  const glue = after.startsWith(' ') ? '' : ' ';
+  input.value = input.value.slice(0, start) + s.insert + glue + after;
+  const caret = start + s.insert.length + 1;
+  input.setSelectionRange(caret, caret);
+  input.focus();
+  if (s.kind === 'emote') chatRecentEmotes = [s.name, ...chatRecentEmotes.filter((n) => n !== s.name)].slice(0, 24);
+  hideChatSuggestions();
+  if (s.kind === 'cmd' && s.cmd.user) updateChatSuggestions();
+}
+
+function insertIntoChat(text) {
+  const input = $('chatInput');
+  const pos = input.selectionStart ?? input.value.length;
+  const before = input.value.slice(0, pos);
+  const after = input.value.slice(pos);
+  const pre = before && !before.endsWith(' ') ? ' ' : '';
+  input.value = `${before}${pre}${text} ${after.trimStart()}`;
+  const caret = (before + pre + text + ' ').length;
+  input.setSelectionRange(caret, caret);
+  input.focus();
+}
+
+function renderEmotePicker(filter = '') {
+  const box = $('chatEmotes');
+  const search = el('input');
+  search.type = 'text';
+  search.placeholder = 'Emotes suchen';
+  search.value = filter;
+  search.addEventListener('keydown', (e) => e.stopPropagation());
+  search.addEventListener('input', () => {
+    renderEmotePicker(search.value);
+    const s = $('chatEmotes').querySelector('input');
+    s.focus();
+    s.setSelectionRange(s.value.length, s.value.length);
+  });
+  box.replaceChildren(search);
+  const all = allChatEmotes();
+  const q = filter.trim().toLowerCase();
+  const match = ([n]) => !q || n.toLowerCase().includes(q);
+  const byName = (a, b) => a[0].localeCompare(b[0], 'de', { sensitivity: 'base' });
+  const sections = [
+    ['Zuletzt benutzt', chatRecentEmotes.filter((n) => all.has(n)).map((n) => [n, all.get(n)])],
+    ['Kanal (7TV, BTTV, FFZ)', [...(chat?.channelEmotes ?? [])].sort(byName)],
+    ['Twitch', [...(chat?.twitchEmotes ?? [])]],
+    ['Global (7TV, BTTV, FFZ)', [...(chat?.globalEmotes ?? [])].sort(byName)],
+  ];
+  let any = false;
+  for (const [title, list] of sections) {
+    const items = list.filter(match).slice(0, 400);
+    if (!items.length) continue;
+    any = true;
+    box.append(el('h4', null, title));
+    const grid = el('div', 'grid');
+    for (const [name, url] of items) {
+      const b = el('button');
+      b.type = 'button';
+      b.title = name;
+      const img = el('img');
+      img.src = url;
+      img.alt = name;
+      img.loading = 'lazy';
+      b.append(img);
+      b.addEventListener('click', () => {
+        chatRecentEmotes = [name, ...chatRecentEmotes.filter((n) => n !== name)].slice(0, 24);
+        insertIntoChat(name);
+      });
+      grid.append(b);
+    }
+    box.append(grid);
+  }
+  if (!any) box.append(el('p', 'info-note', q ? 'Keine passenden Emotes' : 'Emotes werden geladen …'));
+}
+
+// ---------------------------------------------------------------- Profilkarte
+
+function closeChatCard() {
+  $('chatCard').hidden = true;
+  $('chatCard').replaceChildren();
+}
+
+async function openChatCard(login, msg) {
+  if (!login) return;
+  const card = $('chatCard');
+  const channel = chatLogin ?? replay?.login ?? '';
+  const myLogin = chat?.auth?.login ?? null;
+  const self = myLogin === login;
+  const canSend = Boolean(chat?.canSend) && !replay;
+  const canModerate = Boolean(chatMe?.mod) && !self && login !== channel && !replay;
+  const theirs = [...chatMsgs.values()].filter((m) => m.login === login && !m.system);
+  const last = msg ?? theirs[theirs.length - 1] ?? null;
+  card.replaceChildren();
+  const close = el('button', 'icon-btn close');
+  close.append(icon('close'));
+  close.title = 'Schließen';
+  close.addEventListener('click', closeChatCard);
+  const head = el('div', 'head');
+  const avatar = el('img', 'avatar');
+  avatar.alt = '';
+  const text = el('div');
+  const name = el('b', null, last?.name ?? login);
+  name.style.color = nameColor(last?.color, login);
+  const facts = el('small', null, 'Lädt …');
+  text.append(name, facts);
+  head.append(avatar, text);
+  card.append(close, head);
+  const desc = el('p', 'desc');
+  desc.hidden = true;
+  card.append(desc);
+  if (msg?.text) card.append(el('div', 'quote', msg.text));
+  const actions = el('div', 'actions');
+  const action = (label, run, cls = '') => {
+    const b = el('button', `pill small ${cls}`.trim(), label);
+    b.addEventListener('click', run);
+    actions.append(b);
+  };
+  const ctx = () => ({ roomId: chatRoom.roomId, broadcaster: Boolean(chatMe?.broadcaster), mod: Boolean(chatMe?.mod) });
+  const run = async (name, args) => {
+    closeChatCard();
+    const r = await gx.twitchChatCommand(name, args, ctx());
+    chatInfo(r?.ok ? r.message ?? 'Erledigt.' : r?.error ?? 'Fehlgeschlagen');
+  };
+  if (canSend && msg && !/^(self-|info-|sys-)/.test(msg.id)) action('Antworten', () => {
+    closeChatCard();
+    setChatReply(msg);
+  });
+  if (canSend && !self) {
+    action('Erwähnen', () => {
+      closeChatCard();
+      insertIntoChat(`@${last?.name ?? login}`);
+    });
+    action('Flüstern', () => {
+      closeChatCard();
+      const input = $('chatInput');
+      input.value = `/w ${login} `;
+      input.focus();
+    });
+  }
+  if (msg?.text) action('Kopieren', () => {
+    navigator.clipboard?.writeText(msg.text).catch(() => {});
+    closeChatCard();
+    toast('Nachricht kopiert');
+  });
+  action('Kanal öffnen', () => {
+    closeChatCard();
+    if (state.fullscreen) gx.setFullscreen(false);
+    Twitch.openChannel(login, last?.name ?? login);
+  });
+  if (canModerate) {
+    if (msg && !/^(self-|info-|sys-)/.test(msg.id)) action('Löschen', async () => {
+      closeChatCard();
+      const r = await gx.twitchChatDelete(msg.id, ctx());
+      if (!r?.ok) chatInfo(r?.error ?? 'Löschen fehlgeschlagen');
+    }, 'mod');
+    action('Timeout 1 Min.', () => run('timeout', `${login} 60`), 'mod');
+    action('Timeout 10 Min.', () => run('timeout', `${login} 600`), 'mod');
+    action('Timeout 1 Std.', () => run('timeout', `${login} 3600`), 'mod');
+    action('Timeout 1 Tag', () => run('timeout', `${login} 86400`), 'mod');
+    action('Bannen', () => run('ban', login), 'danger');
+    action('Bann aufheben', () => run('unban', login), 'mod');
+  }
+  if (canSend && !self) action('Blockieren', () => run('block', login), 'danger');
+  card.append(actions);
+  if (theirs.length) {
+    card.append(el('h5', null, `Nachrichten im Chat (${theirs.length})`));
+    const h = el('div', 'history');
+    for (const m of theirs.slice(-50).reverse()) h.append(el('div', null, `${chatTimeFormat.format(new Date(m.time ?? Date.now()))}  ${m.text ?? ''}`));
+    card.append(h);
+  }
+  card.hidden = false;
+  const info = await gx.twitchChatUser(login, channel).catch(() => null);
+  if (card.hidden || !card.contains(facts)) return;
+  if (!info) {
+    facts.textContent = '';
+    return;
+  }
+  if (info.avatar) avatar.src = info.avatar;
+  name.textContent = info.name;
+  const date = (t) => new Date(t).toLocaleDateString('de-DE', { day: 'numeric', month: 'long', year: 'numeric' });
+  facts.textContent = [info.createdAt && `Konto erstellt am ${date(info.createdAt)}`, info.followedAt && `Folgt seit ${date(info.followedAt)}`, info.followers != null && `${count(info.followers)} Follower`].filter(Boolean).join(' · ');
+  if (info.description) {
+    desc.textContent = info.description;
+    desc.hidden = false;
+  }
+}
+
+// ---------------------------------------------------------------- Chat-Wiedergabe (VODs)
+
+async function startReplay(vod, login) {
+  if (!vod) return;
+  chat?.close();
+  stopReplay();
+  chatLogin = null;
+  replay = { vod, login, buffer: [], cursor: null, start: -1, timer: null, shown: 0, busy: false, failures: 0, emotes: new Map() };
+  const r = replay;
+  $('chatTitle').textContent = 'Chat-Wiedergabe';
+  $('chatSub').textContent = `${login ?? ''} · läuft mit dem Video`;
+  $('chatList').replaceChildren(el('div', 'chat-line system', 'Der Chat läuft passend zur Stelle im Video mit.'));
+  chatMsgs.clear();
+  setChatReply(null);
+  closeChatCard();
+  hideChatSuggestions();
+  $('chatEmotes').hidden = true;
+  $('chatRoom').hidden = true;
+  renderChatState();
+  replayExtras(r);
+  r.timer = setInterval(() => replayTick(r), 700);
+  chatWanted ??= state.settings?.twitchChatOpen === true;
+  if (chatWanted && $('queuePanel').hidden) toggleChat(true);
+}
+
+function stopReplay() {
+  if (!replay) return;
+  clearInterval(replay.timer);
+  replay = null;
+}
+
+/** Abzeichen und 7TV/BTTV/FFZ-Emotes des Kanals – sobald Kanal und Kanal-Nummer bekannt sind (kommen mit den Details). */
+function replayExtras(r) {
+  const t = state.details?.twitch;
+  const login = r.login ?? t?.channelLogin ?? null;
+  if (login && !r.badgesFor) {
+    r.badgesFor = login;
+    r.login = login;
+    $('chatSub').textContent = `${login} · läuft mit dem Video`;
+    gx.twitchBadges(login).then((b) => {
+      if (replay === r) chatBadges = b ?? {};
+    });
+  }
+  const room = t?.channelUserId ?? null;
+  if (room && !r.emotesFor) {
+    r.emotesFor = room;
+    thirdPartyEmotes(room)
+      .then((map) => {
+        if (replay === r) r.emotes = map;
+      })
+      .catch(() => {});
+  }
+}
+
+/** Ein Schritt: passende Nachrichten nachladen und bis zur aktuellen Stelle zeigen. */
+async function replayTick(r) {
+  if (replay !== r || r.busy || $('chatPanel').hidden) return;
+  if (!r.badgesFor || !r.emotesFor) replayExtras(r);
+  if (r.failures && Date.now() < r.retryAt) return;
+  r.busy = true;
+  try {
+    const pos = Math.floor((player.positionMs || 0) / 1000);
+    const lastOffset = r.buffer.length ? r.buffer[r.buffer.length - 1].offset : -1;
+    // Gesprungen (oder Anfang): ab hier neu laden
+    if (!r.buffer.length || pos < r.start - 2 || pos > lastOffset + 90) {
+      const from = Math.max(0, pos - 30);
+      const page = await gx.twitchReplay(r.vod, from, null);
+      if (replay !== r) return;
+      r.buffer = page.messages;
+      r.cursor = page.next;
+      r.start = from;
+      r.shown = 0;
+      $('chatList').replaceChildren();
+    }
+    let rounds = 0;
+    while (r.cursor && (r.buffer.length ? r.buffer[r.buffer.length - 1].offset : 0) < pos + 20 && rounds++ < 5) {
+      const page = await gx.twitchReplay(r.vod, null, r.cursor);
+      if (replay !== r) return;
+      r.buffer.push(...page.messages);
+      r.cursor = page.next;
+    }
+    // Neue Nachrichten bis zur Stelle anhängen
+    const list = $('chatList');
+    while (r.shown < r.buffer.length && r.buffer[r.shown].offset <= pos) {
+      const raw = r.buffer[r.shown++];
+      if (list.querySelector(`[data-id="${CSS.escape(raw.id)}"]`)) continue;
+      const m = replayMessage(raw, r.emotes);
+      chatMsgs.set(m.id, m);
+      if (chatMsgs.size > 600) chatMsgs.delete(chatMsgs.keys().next().value);
+      list.append(chatLineElement(m, { replayMode: true }));
+    }
+    while (list.childElementCount > CHAT_MAX) list.firstElementChild.remove();
+    if (chatStick) list.scrollTop = list.scrollHeight;
+    // Weit hinter der Stelle: Speicher freigeben
+    if (r.buffer.length > 3000) {
+      const keep = r.buffer.findIndex((m) => m.offset >= pos - 600);
+      if (keep > 0) {
+        r.buffer = r.buffer.slice(keep);
+        r.shown = Math.max(0, r.shown - keep);
+        r.start = r.buffer[0]?.offset ?? pos;
+      }
+    }
+    r.failures = 0;
+  } catch (err) {
+    r.failures++;
+    r.retryAt = Date.now() + Math.min(30000, 2000 * r.failures);
+    if (r.failures === 1 && !$('chatList').querySelector('.chat-line:not(.system)')) chatInfo(`Chat-Wiedergabe: ${cleanError(err)}`);
+  } finally {
+    r.busy = false;
+  }
+}
+
+/** Nachricht der Chat-Wiedergabe → Chat-Zeile (Twitch-Emotes aus den Stücken, 7TV/BTTV/FFZ aus dem Text). */
+function replayMessage(raw, emotes) {
+  const frags = [];
+  let text = '';
+  for (const f of raw.frags) {
+    if (f.emoteId) {
+      frags.push({ emote: true, name: f.name, url: `https://static-cdn.jtvnw.net/emoticons/v2/${f.emoteId}/default/dark/1.0` });
+      text += f.name;
+    } else {
+      frags.push(...fragmentsOf(f.text ?? '', '', emotes));
+      text += f.text ?? '';
+    }
+  }
+  let action = false;
+  if (text.startsWith('\u0001ACTION ') && text.endsWith('\u0001')) {
+    action = true;
+    text = text.slice(8, -1);
+    const first = frags.find((x) => x.text != null);
+    if (first) first.text = first.text.replace('\u0001ACTION ', '');
+    const lastText = [...frags].reverse().find((x) => x.text != null);
+    if (lastText) lastText.text = lastText.text.replace(/\u0001$/, '');
+  }
+  return { id: raw.id, login: raw.login, name: raw.name, color: raw.color, badgeList: raw.badges, frags, text, action, time: raw.offset * 1000 };
 }
 
 function onTwitchAccount() {

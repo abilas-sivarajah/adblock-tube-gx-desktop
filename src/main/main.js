@@ -11,6 +11,7 @@ import * as PoToken from './potoken.js';
 import * as Account from './account.js';
 import * as TW from './twitch.js';
 import * as TwitchAccount from './twitch-account.js';
+import * as TwChat from './twitch-extras.js';
 import { CastServer } from './cast-server.js';
 import { powerAction } from './power.js';
 import { Session } from './session.js';
@@ -418,10 +419,33 @@ async function loadTwitch(token, video, resume, again) {
     send('player:details', { token, details: current.details });
   }
   const p = play.value;
-  current.stream = { kind: 'twitch', url: p.url, isLive: p.isLive, login: p.login, vod: p.vod, client: p.account ? 'Twitch (Konto)' : 'Twitch', account: p.account, viewer: p.viewer ?? null };
+  // Clips sind einfache MP4-Dateien (ohne Werbung, ohne Werbeblocker)
+  current.stream = p.clip
+    ? { kind: 'progressive', url: p.url, isLive: false, client: 'Twitch-Clip', twitchClip: p.clip, height: p.height ?? null }
+    : { kind: 'twitch', url: p.url, isLive: p.isLive, login: p.login, vod: p.vod, client: p.account ? 'Twitch (Konto)' : 'Twitch', account: p.account, viewer: p.viewer ?? null };
   current.resolvedAt = Date.now();
   console.info(`[twitch] ${video.id}${p.account ? ' mit Konto' : ''}${again ? ' (neu geladen)' : ''}`);
   send('player:source', { token, video: current.video, stream: current.stream, startMs: p.isLive ? null : resume, maxQuality: store.settings.maxQuality });
+}
+
+/** Chat-Befehl: Kontext vom Fenster (Raum, Rolle) plus Konto-Nummer und Rechte von hier. */
+function chatContext(ctx) {
+  const c = ctx && typeof ctx === 'object' ? ctx : {};
+  return {
+    roomId: /^\d{1,15}$/.test(String(c.roomId ?? '')) ? String(c.roomId) : null,
+    me: { userId: TwitchAccount.status().userId, broadcaster: c.broadcaster === true, mod: c.mod === true },
+    scopes: TwitchAccount.currentTokens()?.scopes ?? [],
+  };
+}
+
+/** Ergebnis für das Fenster: { ok, message } bzw. { ok: false, error } (Fehlertexte bleiben lesbar). */
+async function twitchChatAction(run) {
+  try {
+    await ensureTwitchToken();
+    return { ok: true, message: (await run()) ?? null };
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err) };
+  }
 }
 
 let twitchRefreshing = null;
@@ -953,18 +977,20 @@ function setupIpc() {
     broadcastState();
     return s;
   });
-  ipcMain.handle('library:get', () => ({ history: store.history.slice(0, 60), recommendations: store.recommendations.slice(0, 60), searchHistory: store.searchHistory }));
+  ipcMain.handle('library:get', () => ({ history: store.history.slice(0, 60), recommendations: store.recommendations.slice(0, 60), searchHistory: store.searchHistory, twitchSearchHistory: store.twitchSearchHistory }));
   ipcMain.handle('library:removeHistory', (_e, id) => {
     store.removeHistory(typeof id === 'string' ? id : null);
     return true;
   });
   ipcMain.handle('session:get', () => ({ ...session.snapshot(), current: current ? { token: current.token, video: current.video, stream: current.stream, segments: current.segments, error: current.error, startMs: current.startMs } : null }));
 
-  ipcMain.on('session:play', (_e, video, queue) => {
+  ipcMain.on('session:play', (_e, video, queue, startMs) => {
     const v = safeVideo(video);
     if (!v) return;
     const list = Array.isArray(queue) ? queue.map(safeVideo).filter(Boolean) : null;
-    session.play(v, { queue: list });
+    // Startstelle (z. B. "Ganzen Stream ansehen" bei einem Clip)
+    const start = Number.isFinite(startMs) && startMs > 0 ? Math.floor(startMs) : undefined;
+    session.play(v, start != null ? { queue: list, startMs: start } : { queue: list });
   });
   ipcMain.on('session:add', (_e, video, next) => {
     const v = safeVideo(video);
@@ -1094,7 +1120,7 @@ function setupIpc() {
   ipcMain.handle('tw:moreStreams', (_e, language, cursor) => TW.moreStreams({ language: String(language ?? ''), cursor: String(cursor) }));
   ipcMain.handle('tw:category', (_e, name, language, cursor) => TW.category(String(name), { language: String(language ?? ''), cursor: typeof cursor === 'string' ? cursor : null }));
   ipcMain.handle('tw:search', (_e, q) => {
-    store.addSearch(q);
+    store.addSearch(q, true);
     return TW.search(String(q).slice(0, 200));
   });
   ipcMain.handle('tw:searchChannels', (_e, q, cursor) => TW.searchChannels(String(q), String(cursor)));
@@ -1119,6 +1145,18 @@ function setupIpc() {
     await ensureTwitchToken();
     return TwitchAccount.chatAuth();
   });
+  // Clips, Chat-Extras (Abzeichen, Profilkarte, Chat-Wiedergabe) und /-Befehle
+  ipcMain.handle('tw:clips', (_e, login, period) => TW.clips(String(login), String(period ?? 'week')));
+  ipcMain.handle('tw:badges', (_e, login) => TwChat.badges(String(login)).catch(() => ({})));
+  ipcMain.handle('tw:chatUser', (_e, login, channel) => TwChat.chatUser(String(login), String(channel ?? '')));
+  ipcMain.handle('tw:replay', (_e, vod, offset, cursor) => TwChat.replay(String(vod), { offset: Number(offset) || 0, cursor: typeof cursor === 'string' ? cursor : null }));
+  ipcMain.handle('tw:emotes', async (_e, room) => {
+    if (!TwitchAccount.loggedIn() || !/^\d{1,15}$/.test(String(room))) return {};
+    await ensureTwitchToken();
+    return TwChat.usableEmotes(String(room), { userId: TwitchAccount.status().userId, scopes: TwitchAccount.currentTokens()?.scopes ?? [] }).catch(() => ({}));
+  });
+  ipcMain.handle('tw:chatCommand', (_e, name, args, ctx) => twitchChatAction(() => TwChat.runCommand(String(name), String(args ?? ''), chatContext(ctx))));
+  ipcMain.handle('tw:chatDelete', (_e, id, ctx) => twitchChatAction(() => TwChat.deleteMessage(String(id), chatContext(ctx)).then(() => null)));
   ipcMain.handle('account:status', () => Account.status());
   ipcMain.handle('account:login', () => login());
   ipcMain.handle('account:logout', () => logout());
