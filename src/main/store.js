@@ -28,6 +28,8 @@ export const DEFAULT_SETTINGS = {
   twitchLanguage: 'de', // beliebte Twitch-Streams: 'de', 'en' oder '' (alle Sprachen)
   twitchAdSpoofing: true, // Twitch-Werbung zuerst als gesehen melden (Ad-Spoofing), sonst nur Ersatz-Sitzungen
   twitchChatOpen: false, // Chat neben Twitch-Live-Streams gleich zeigen (sonst ausgeblendet)
+  twitchChatHistory: true, // beim Betreten die letzten Chat-Nachrichten laden (recent-messages.robotty.de)
+  twitchChatTimestamps: false, // Uhrzeit vor Chat-Nachrichten
   remotePower: true, // Handy darf den PC neu starten und herunterfahren
 };
 
@@ -76,6 +78,8 @@ export class Store {
     this.history = Array.isArray(lib.history) ? lib.history : [];
     this.recommendations = Array.isArray(lib.recommendations) ? lib.recommendations : [];
     this.searchHistory = Array.isArray(lib.searchHistory) ? lib.searchHistory : [];
+    // Twitch hat einen eigenen Suchverlauf
+    this.twitchSearchHistory = Array.isArray(lib.twitchSearchHistory) ? lib.twitchSearchHistory : [];
     // Abos: { id, name, thumbnail, since } – auf diesem PC, mit Google-Konto zusätzlich bei YouTube
     this.subscriptions = Array.isArray(lib.subscriptions) ? lib.subscriptions : [];
     // Twitch-Kanäle, denen man folgt: { login, userId, name, avatar, since }
@@ -130,7 +134,7 @@ export class Store {
   saveLibraryNow() {
     clearTimeout(this.libraryTimer);
     try {
-      writeJson(this.libraryFile, { history: this.history, recommendations: this.recommendations, searchHistory: this.searchHistory, subscriptions: this.subscriptions, twitchFollows: this.twitchFollows, twitchFavorites: this.twitchFavorites });
+      writeJson(this.libraryFile, { history: this.history, recommendations: this.recommendations, searchHistory: this.searchHistory, twitchSearchHistory: this.twitchSearchHistory, subscriptions: this.subscriptions, twitchFollows: this.twitchFollows, twitchFavorites: this.twitchFavorites });
     } catch (err) {
       // Läuft aus einem Timer: eine Ausnahme hier brächte Electrons Absturz-Dialog. Beim nächsten Mal klappt es
       console.warn('[speicher] Bibliothek nicht gespeichert', err?.message ?? err);
@@ -276,10 +280,12 @@ export class Store {
     return changed;
   }
 
-  addSearch(query) {
+  /** Suche merken – YouTube und Twitch getrennt. */
+  addSearch(query, twitch = false) {
     const q = String(query ?? '').trim().slice(0, 200);
     if (!q || !this.settings.historyEnabled) return;
-    this.searchHistory = [q, ...this.searchHistory.filter((s) => s.toLowerCase() !== q.toLowerCase())].slice(0, 30);
+    const key = twitch ? 'twitchSearchHistory' : 'searchHistory';
+    this[key] = [q, ...this[key].filter((s) => s.toLowerCase() !== q.toLowerCase())].slice(0, 30);
     this.saveLibrarySoon();
   }
 }

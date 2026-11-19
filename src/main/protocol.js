@@ -32,12 +32,13 @@ function imageUrl(value) {
   }
 }
 
-// Twitch: Live-Stream 'twitch:<login>', VOD 'twitch-vod:<id>'
+// Twitch: Live-Stream 'twitch:<login>', VOD 'twitch-vod:<id>', Clip 'twitch-clip:<slug>'
 const TWITCH_LIVE = /^twitch:([a-z0-9_]{1,25})$/;
 const TWITCH_VOD = /^twitch-vod:(\d{1,15})$/;
+const TWITCH_CLIP = /^twitch-clip:([A-Za-z0-9_-]{1,120})$/;
 const TWITCH_LOGIN = /^[a-z0-9_]{1,25}$/;
 
-export const isTwitchVideo = (id) => typeof id === 'string' && (TWITCH_LIVE.test(id) || TWITCH_VOD.test(id));
+export const isTwitchVideo = (id) => typeof id === 'string' && (TWITCH_LIVE.test(id) || TWITCH_VOD.test(id) || TWITCH_CLIP.test(id));
 
 function sanitizeTwitch(v) {
   const live = TWITCH_LIVE.exec(v.id);

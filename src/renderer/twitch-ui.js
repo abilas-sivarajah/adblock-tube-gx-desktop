@@ -238,7 +238,7 @@ function cardMenu(button, v) {
     items.push({ icon: fav ? 'star' : 'starOutline', label: fav ? 'Aus Favoriten entfernen' : 'Zu Favoriten hinzufügen', run: () => toggleFavorite({ login: v.channelLogin, userId: v.channelUserId ?? null, name: v.channelName, avatar: v.avatar ?? null }) });
   }
   if (v.game?.name) items.push({ icon: 'search', label: `Mehr aus „${v.game.displayName}“`, run: () => openCategory(v.game.name) });
-  items.push({ icon: 'open', label: 'Auf twitch.tv öffnen', run: () => gx.openExternal(v.vod ? `https://www.twitch.tv/videos/${v.vod}` : `https://www.twitch.tv/${v.channelLogin}`) });
+  items.push({ icon: 'open', label: 'Auf twitch.tv öffnen', run: () => gx.openExternal(v.clip ? `https://clips.twitch.tv/${v.clip}` : v.vod ? `https://www.twitch.tv/videos/${v.vod}` : `https://www.twitch.tv/${v.channelLogin}`) });
   ctx.openMenu(button, items);
 }
 
@@ -1184,7 +1184,7 @@ function renderChannel() {
   const d = c?.data;
   if (!d) return;
   renderChannelHead();
-  const tabs = [['home', 'Startseite'], ['videos', 'Videos'], ['about', 'Info']];
+  const tabs = [['home', 'Startseite'], ['videos', 'Videos'], ['clips', 'Clips'], ['about', 'Info']];
   pageTabs($('twChannelTabs'), tabs, c.tab, (t) => {
     c.tab = t;
     renderChannel();
@@ -1217,6 +1217,7 @@ function renderChannel() {
     grid.append(...items.map((v) => streamCard(v, { showChannel: false })));
     if (!items.length) $('twChannelStatus').textContent = 'Keine Videos (Twitch löscht vergangene Streams meist nach einigen Tagen)';
   }
+  if (c.tab === 'clips') renderClips(c, body, grid);
   if (c.tab === 'about') {
     const box = el('div', 'tw-about');
     box.append(el('h2', null, `Über ${d.name || d.login}`));
@@ -1228,6 +1229,44 @@ function renderChannel() {
     body.append(box);
   }
   if (c.tab !== 'videos' && $('twChannelStatus').textContent.startsWith('Keine Videos')) $('twChannelStatus').textContent = '';
+}
+
+const CLIP_PERIODS = [['day', '24 Stunden'], ['week', '7 Tage'], ['month', '30 Tage'], ['all', 'Alle']];
+
+/** Reiter „Clips“: beliebteste Clips im gewählten Zeitraum (wie auf twitch.tv). */
+function renderClips(c, body, grid) {
+  c.clipPeriod ??= 'week';
+  const row = el('div', 'clip-periods');
+  for (const [key, label] of CLIP_PERIODS) {
+    const b = el('button', 'tw-chip' + (c.clipPeriod === key ? ' active' : ''), label);
+    b.addEventListener('click', () => {
+      c.clipPeriod = key;
+      renderChannel();
+    });
+    row.append(b);
+  }
+  body.append(row);
+  const key = `${c.login}:${c.clipPeriod}`;
+  c.clips ??= {};
+  const cached = c.clips[key];
+  if (Array.isArray(cached)) {
+    grid.append(...cached.map((v) => streamCard(v, { showChannel: false })));
+    if (!cached.length) body.append(el('p', 'info-note', 'Keine Clips in diesem Zeitraum'));
+    return;
+  }
+  if (cached?.error) {
+    body.append(el('p', 'info-note', `Clips konnten nicht geladen werden: ${cached.error}`));
+    return;
+  }
+  body.append(el('p', 'info-note', 'Clips werden geladen …'));
+  if (cached === 'loading') return;
+  c.clips[key] = 'loading';
+  gx.twitchClips(c.login, c.clipPeriod)
+    .then((list) => (c.clips[key] = list))
+    .catch((err) => (c.clips[key] = { error: ctx.cleanError(err) }))
+    .finally(() => {
+      if (tw.channel === c && c.tab === 'clips') renderChannel();
+    });
 }
 
 /** Laufender Stream groß auf der Kanalseite. */

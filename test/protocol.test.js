@@ -97,3 +97,14 @@ test('Twitch-Chat und PC ausschalten vom Handy', () => {
   assert.throws(() => parseCommand({ type: 'power' }), ProtocolError);
   assert.throws(() => parseCommand({ type: 'power', action: 'rm -rf /' }), ProtocolError);
 });
+
+test('Twitch-Clips werden vom Handy angenommen', async () => {
+  const { sanitizeVideo, isTwitchVideo } = await import('../src/main/protocol.js');
+  assert.equal(isTwitchVideo('twitch-clip:UgliestCrepuscularDiscMcaT-Yj5cqJ_xhiFNc9yE'), true);
+  assert.equal(isTwitchVideo('twitch-clip:../böse'), false);
+  const v = sanitizeVideo({ id: 'twitch-clip:Abc-1', title: 'wow', channelName: 'Papaplatte', channelLogin: 'papaplatte', durationSec: 43 });
+  assert.equal(v.platform, 'twitch');
+  assert.equal(v.channelLogin, 'papaplatte');
+  assert.equal(v.isLive, false);
+  assert.equal(v.durationSec, 43);
+});

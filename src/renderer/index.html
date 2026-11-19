@@ -252,15 +252,25 @@
     <aside id="chatPanel" class="chat-panel" hidden>
       <div class="queue-head">
         <div>
-          <h2>Stream-Chat</h2>
+          <h2 id="chatTitle">Stream-Chat</h2>
           <p id="chatSub"></p>
         </div>
         <button id="btnChatClose" class="icon-btn" data-icon="close" title="Chat schließen (c)"></button>
       </div>
+      <div id="chatRoom" class="chat-room" hidden></div>
       <div id="chatList" class="chat-list"></div>
       <button id="chatJump" class="pill small chat-jump" hidden>Neue Nachrichten ↓</button>
+      <div id="chatCard" class="chat-card" hidden></div>
+      <ul id="chatSuggest" class="chat-suggest" hidden></ul>
+      <div id="chatEmotes" class="chat-emotes" hidden></div>
+      <div id="chatReply" class="chat-reply" hidden>
+        <span id="chatReplyText"></span>
+        <button id="chatReplyClose" type="button" class="icon-btn" data-icon="close" title="Antwort abbrechen"></button>
+      </div>
       <form id="chatForm" class="chat-form" autocomplete="off">
+        <button id="chatEmoteBtn" type="button" class="icon-btn" data-icon="emote" title="Emotes"></button>
         <input id="chatInput" type="text" maxlength="500" placeholder="Nachricht senden" spellcheck="true">
+        <span id="chatCooldown" class="chat-cooldown" hidden></span>
         <button id="chatSend" type="submit" class="icon-btn" title="Senden" data-icon="send"></button>
       </form>
       <div id="chatLogin" class="chat-login" hidden>

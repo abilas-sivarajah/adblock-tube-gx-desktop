@@ -95,3 +95,17 @@ test('Unlesbare Bibliothek wird gesichert statt überschrieben', () => {
   s.saveLibraryNow();
   assert.ok(fs.existsSync(path.join(dir, backups[0])));
 });
+
+test('Suchverlauf: YouTube und Twitch getrennt', () => {
+  const dir = tmp();
+  const s = new Store(dir);
+  s.addSearch('minecraft');
+  s.addSearch('papaplatte', true);
+  s.addSearch('Minecraft');
+  assert.deepEqual(s.searchHistory, ['Minecraft'], 'ohne Doppel, neueste zuerst');
+  assert.deepEqual(s.twitchSearchHistory, ['papaplatte']);
+  s.saveLibraryNow();
+  const again = new Store(dir);
+  assert.deepEqual(again.searchHistory, ['Minecraft']);
+  assert.deepEqual(again.twitchSearchHistory, ['papaplatte']);
+});

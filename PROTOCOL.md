@@ -68,6 +68,7 @@ Unbekannte Felder müssen ignoriert werden.
 |---|---|
 | `twitch:<login>` | Live-Stream des Kanals (Login klein geschrieben, `a-z 0-9 _`, bis 25 Zeichen) |
 | `twitch-vod:<zahl>` | Vergangener Stream / Video (VOD) |
+| `twitch-clip:<slug>` | Clip (`A-Z a-z 0-9 _ -`, bis 120 Zeichen) |
 
 ```json
 { "id": "twitch:trymacs", "title": "…", "channelName": "Trymacs", "channelLogin": "trymacs",
